@@ -3,6 +3,8 @@ import musicSdkRaw from '../modules/utils/musicSdk/index.js'
 import { callUserApiGetMusicUrl, isSourceSupported } from './userApi'
 
 const musicSdk = musicSdkRaw as any
+const QUALITY_FALLBACK_ORDER = ['master', 'flac24bit', 'flac', 'wav', 'ape', '320k', '192k', '128k']
+const AUTO_QUALITY_VALUES = new Set(['best', 'highest', 'auto'])
 
 export const initMusicSdk = async () => {
   if (musicSdk?.init) await musicSdk.init()
@@ -151,22 +153,135 @@ const resolveRedirects = async (url: string): Promise<string> => {
   }
 }
 
+const collectAvailableQualities = (songInfo: any) => {
+  const values = new Set<string>()
+  const add = (quality: any) => {
+    if (typeof quality === 'string' && quality.trim()) values.add(quality.trim())
+  }
+  const addFromTypes = (types: any) => {
+    if (Array.isArray(types)) {
+      for (const item of types) add(item?.type || item)
+    } else if (types && typeof types === 'object') {
+      for (const key of Object.keys(types)) add(key)
+    }
+  }
+
+  addFromTypes(songInfo?.types)
+  addFromTypes(songInfo?._types)
+  addFromTypes(songInfo?.meta?.types)
+  addFromTypes(songInfo?.meta?._types)
+  addFromTypes(songInfo?.meta?.qualitys)
+  addFromTypes(songInfo?.meta?._qualitys)
+  return values
+}
+
+export const getQualityFallbackCandidates = (
+  songInfo: any,
+  requestedQuality = '128k',
+  allowQualityFallback = true,
+) => {
+  const requested = String(requestedQuality || '128k').trim()
+  const isAuto = AUTO_QUALITY_VALUES.has(requested.toLowerCase())
+  const available = collectAvailableQualities(songInfo)
+  const orderedAvailable = QUALITY_FALLBACK_ORDER.filter(quality => available.has(quality))
+
+  if (isAuto) {
+    const startQuality = orderedAvailable[0] || QUALITY_FALLBACK_ORDER[0]
+    const startIndex = Math.max(0, QUALITY_FALLBACK_ORDER.indexOf(startQuality))
+    const candidates = QUALITY_FALLBACK_ORDER.slice(startIndex)
+    return allowQualityFallback ? candidates : [candidates[0] || '128k']
+  }
+
+  if (!allowQualityFallback) return [requested]
+
+  const startIndex = QUALITY_FALLBACK_ORDER.indexOf(requested)
+  if (startIndex === -1) {
+    return [
+      requested,
+      ...QUALITY_FALLBACK_ORDER.filter(quality => quality !== requested),
+    ]
+  }
+
+  const lowerOrEqual = QUALITY_FALLBACK_ORDER.slice(startIndex)
+  return lowerOrEqual
+}
+
+const annotateAttempts = (attempts: any[], quality: string, fallback: any[] = []) => {
+  const items = attempts.length
+    ? attempts
+    : [{ name: '系统', status: 'fail', message: '解析失败' }]
+  return items.map(attempt => ({
+    ...attempt,
+    quality,
+    fallback,
+    message: attempt.message ? `[${quality}] ${attempt.message}` : `请求音质 ${quality}`,
+  }))
+}
+
 export const resolveMusicUrl = async (input: {
   songInfo: any
   quality: string
+  allowQualityFallback?: boolean
   enableAutoSwitchApiSource?: boolean
 }) => {
   if (!input.songInfo?.source) throw new Error('Invalid songInfo')
-  const result = await callUserApiGetMusicUrl(
-    input.songInfo.source,
+  const requestedQuality = String(input.quality || '128k').trim()
+  const candidates = getQualityFallbackCandidates(
     input.songInfo,
-    input.quality || '128k',
-    undefined,
-    undefined,
-    input.enableAutoSwitchApiSource !== false,
+    requestedQuality,
+    input.allowQualityFallback !== false,
   )
-  if (result.url) result.url = await resolveRedirects(result.url)
-  return result
+  const attempts: any[] = []
+  let lastError: any = null
+
+  for (const quality of candidates) {
+    try {
+      const result = await callUserApiGetMusicUrl(
+        input.songInfo.source,
+        input.songInfo,
+        quality,
+        undefined,
+        undefined,
+        input.enableAutoSwitchApiSource !== false,
+      )
+      if (result.url) result.url = await resolveRedirects(result.url)
+
+      const resultAttempts = annotateAttempts(
+        result.attempts || [{ name: '系统', status: 'success', message: '解析成功' }],
+        quality,
+        candidates,
+      )
+      if (quality !== requestedQuality) {
+        resultAttempts.push({
+          name: '系统',
+          status: 'success',
+          quality,
+          fallback: candidates,
+          message: AUTO_QUALITY_VALUES.has(requestedQuality.toLowerCase())
+            ? `已选择最高可解析音质 ${quality}`
+            : `已从 ${requestedQuality} 自动降级为 ${quality}`,
+        })
+      }
+
+      return {
+        ...result,
+        type: result.type || quality,
+        attempts: [...attempts, ...resultAttempts],
+        requestedQuality,
+      }
+    } catch (error: any) {
+      lastError = error
+      attempts.push(...annotateAttempts(
+        error.attempts || [{ name: '系统', status: 'fail', message: error.message || String(error) }],
+        quality,
+        candidates,
+      ))
+    }
+  }
+
+  const error: any = new Error(lastError?.message || `无法解析音质 ${requestedQuality}`)
+  error.attempts = attempts
+  throw error
 }
 
 export const getLyricText = async (songInfo: any): Promise<string> => {

@@ -14,6 +14,8 @@ export interface DownloadTask {
   songInfo: any
   source: string
   quality: string
+  requestedQuality?: string
+  allowQualityFallback: boolean
   url: string
   sourceName: string
   attempts: any[]
@@ -46,6 +48,7 @@ export interface DownloadTask {
 interface CreateTaskInput {
   songInfo: any
   quality: string
+  allowQualityFallback?: boolean
   url?: string
   options?: Partial<DownloadTask['options']>
 }
@@ -157,6 +160,7 @@ class DownloadTaskManager {
       songInfo: input.songInfo,
       source: input.songInfo.source,
       quality: input.quality || '128k',
+      allowQualityFallback: input.allowQualityFallback ?? true,
       url: input.url || '',
       sourceName: '',
       attempts: [],
@@ -197,6 +201,7 @@ class DownloadTaskManager {
     return this.createTask({
       songInfo: oldTask.songInfo,
       quality: oldTask.quality,
+      allowQualityFallback: oldTask.allowQualityFallback ?? true,
       options: oldTask.options,
     })
   }
@@ -241,8 +246,16 @@ class DownloadTaskManager {
         task.status = 'resolving'
         task.error = ''
         this.touch(task)
-        const resolved = await resolveMusicUrl({ songInfo: task.songInfo, quality: task.quality })
+        const resolved = await resolveMusicUrl({
+          songInfo: task.songInfo,
+          quality: task.quality,
+          allowQualityFallback: task.allowQualityFallback ?? true,
+        })
         task.url = resolved.url
+        if (resolved.type && resolved.type !== task.quality) {
+          task.requestedQuality = task.quality
+          task.quality = resolved.type
+        }
         task.sourceName = resolved.sourceName || ''
         task.attempts = resolved.attempts || []
       }

@@ -1,8 +1,25 @@
 const ADMIN_STORAGE_KEY = 'lxfetch_admin';
 const LEGACY_ADMIN_STORAGE_KEY = 'lxdownload_admin';
+const DEFAULT_QUALITY_STORAGE_KEY = 'lxfetch_default_quality';
+const QUALITY_FALLBACK_STORAGE_KEY = 'lxfetch_quality_fallback';
+
+const QUALITY_ORDER = ['master', 'flac24bit', 'flac', 'wav', 'ape', '320k', '192k', '128k'];
+const QUALITY_LABELS = {
+  best: '最高可用',
+  master: 'Master',
+  flac24bit: 'FLAC 24bit',
+  flac: 'FLAC',
+  wav: 'WAV',
+  ape: 'APE',
+  '320k': '320k',
+  '192k': '192k',
+  '128k': '128k',
+};
 
 const state = {
   adminPassword: localStorage.getItem(ADMIN_STORAGE_KEY) || localStorage.getItem(LEGACY_ADMIN_STORAGE_KEY) || '',
+  defaultQuality: localStorage.getItem(DEFAULT_QUALITY_STORAGE_KEY) || 'best',
+  allowQualityFallback: localStorage.getItem(QUALITY_FALLBACK_STORAGE_KEY) !== 'false',
   config: null,
   platforms: [],
   sources: [],
@@ -19,11 +36,16 @@ const state = {
   songListUid: '',
   activeSongList: null,
   songListSongs: [],
+  songListDetailAllSongs: [],
   songListDetailPage: 1,
+  songListDetailPageSize: 30,
   leaderBoards: [],
+  leaderBoardPage: 1,
+  leaderBoardPageSize: 12,
   activeLeaderBoard: null,
   leaderSongs: [],
   leaderPage: 1,
+  activeView: 'search',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -72,6 +94,8 @@ const getOptions = () => ({
   verifyMetadata: $('opt-verify').checked,
 });
 
+const qualityLabel = (quality) => QUALITY_LABELS[quality] || quality || '';
+
 const qualityRank = (quality) => {
   const value = String(quality || '').toLowerCase();
   if (value.includes('master')) return 90;
@@ -88,13 +112,45 @@ const qualityList = (song) => {
   if (Array.isArray(song.types)) {
     for (const item of song.types) if (item.type && !detected.includes(item.type)) detected.push(item.type);
   }
+  if (song.meta?._qualitys) detected.push(...Object.keys(song.meta._qualitys).filter(q => !detected.includes(q)));
+  if (Array.isArray(song.meta?.qualitys)) {
+    for (const item of song.meta.qualitys) if (item.type && !detected.includes(item.type)) detected.push(item.type);
+  }
   const values = detected.length
     ? detected.sort((a, b) => qualityRank(b) - qualityRank(a))
-    : ['flac24bit', 'flac', '320k', '128k'];
-  for (const fallback of ['flac24bit', 'flac', '320k', '128k']) {
+    : [...QUALITY_ORDER];
+  for (const fallback of QUALITY_ORDER) {
     if (!values.includes(fallback)) values.push(fallback);
   }
   return values;
+};
+
+const selectedDefaultQuality = () => {
+  return state.defaultQuality || 'best';
+};
+
+const renderQualityOptions = (song, selected = selectedDefaultQuality()) => {
+  const qualities = qualityList(song);
+  const values = ['best', ...qualities.filter((quality, index) => qualities.indexOf(quality) === index)];
+  const selectedValue = values.includes(selected) ? selected : 'best';
+  return values
+    .map(q => `<option value="${escapeHtml(q)}" ${q === selectedValue ? 'selected' : ''}>${escapeHtml(qualityLabel(q))}</option>`)
+    .join('');
+};
+
+const renderDownloadSettings = () => {
+  const select = $('opt-default-quality');
+  select.innerHTML = ['best', ...QUALITY_ORDER]
+    .map(q => `<option value="${escapeHtml(q)}">${escapeHtml(qualityLabel(q))}</option>`)
+    .join('');
+  select.value = ['best', ...QUALITY_ORDER].includes(state.defaultQuality) ? state.defaultQuality : 'best';
+  $('opt-quality-fallback').checked = state.allowQualityFallback;
+};
+
+const rerenderSongViews = () => {
+  renderSearchResults();
+  renderSongListDetail();
+  renderLeaderSongs();
 };
 
 const loadConfig = async () => {
@@ -117,6 +173,34 @@ const renderPlatforms = () => {
   renderSelect('search-source');
   renderSelect('songlist-source', p => p.songListSupported);
   renderSelect('leaderboard-source', p => p.leaderboardSupported);
+};
+
+const activateView = (view) => {
+  state.activeView = view;
+  document.querySelectorAll('.menu-item').forEach(item => {
+    item.classList.toggle('active', item.dataset.view === view);
+  });
+  document.querySelectorAll('.view-section').forEach(section => {
+    section.classList.toggle('active', section.id === `view-${view}`);
+  });
+
+  if (view === 'songlist' && !state.songLists.length && !state.songListTags.length) {
+    loadSongListTags()
+      .then(() => loadSongLists(1))
+      .catch(error => toast(error.message));
+  }
+  if (view === 'leaderboard' && !state.leaderBoards.length) {
+    loadLeaderBoards().catch(error => toast(error.message));
+  }
+  if (view === 'tasks') {
+    loadTasks().catch(error => toast(error.message));
+  }
+  if (view === 'files') {
+    loadFiles().catch(error => toast(error.message));
+  }
+  if (view === 'sources') {
+    loadSources().catch(error => toast(error.message));
+  }
 };
 
 const loadSources = async () => {
@@ -202,6 +286,9 @@ const renderTasks = () => {
   }
   el.innerHTML = state.tasks.map(task => {
     const statusClass = task.status === 'finished' ? 'ok' : (task.status === 'failed' ? 'fail' : (task.status === 'stopped' ? 'warn' : ''));
+    const qualityText = task.requestedQuality && task.requestedQuality !== task.quality
+      ? `${qualityLabel(task.requestedQuality)} -> ${qualityLabel(task.quality)}`
+      : qualityLabel(task.quality);
     const errors = [
       ...(task.metadata?.metadataErrors || []),
       ...(task.metadata?.verifyErrors || []),
@@ -213,7 +300,7 @@ const renderTasks = () => {
           <span>${escapeHtml(task.songInfo?.name || 'Unknown')}</span>
           <span class="badge ${statusClass}">${statusName(task.status)}</span>
         </div>
-        <div class="meta">${escapeHtml(task.songInfo?.singer || '')} · ${escapeHtml(task.source)} · ${escapeHtml(task.quality)}</div>
+        <div class="meta">${escapeHtml(task.songInfo?.singer || '')} · ${escapeHtml(task.source)} · ${escapeHtml(qualityText)}</div>
         <div class="progress"><span style="width:${Math.max(0, Math.min(100, task.progress || 0))}%"></span></div>
         <div class="meta">${task.progress || 0}% · ${formatSize(task.received)} / ${formatSize(task.total)} · ${formatSize(task.speed)}/s</div>
         <div class="badges">
@@ -261,7 +348,12 @@ window.showAttempts = (id) => {
 const createDownloadTask = async (songInfo, quality, silent = false) => {
   const data = await api('/api/download/tasks', {
     method: 'POST',
-    body: JSON.stringify({ songInfo, quality, options: getOptions() }),
+    body: JSON.stringify({
+      songInfo,
+      quality,
+      allowQualityFallback: state.allowQualityFallback,
+      options: getOptions(),
+    }),
   });
   if (!silent) {
     toast('已创建下载任务');
@@ -274,7 +366,7 @@ const createDownloadTasks = async (songs) => {
   if (!songs.length) return toast('暂无可下载歌曲');
   let created = 0;
   for (const song of songs) {
-    await createDownloadTask(song, qualityList(song)[0] || '320k', true);
+    await createDownloadTask(song, selectedDefaultQuality(), true);
     created += 1;
   }
   toast(`已创建 ${created} 个下载任务`);
@@ -297,7 +389,6 @@ const renderSongTable = (targetId, songs, prefix, downloadHandler) => {
       <thead><tr><th>歌曲</th><th>歌手</th><th>专辑</th><th>时长</th><th>音质</th><th></th></tr></thead>
       <tbody>
         ${songs.map((song, index) => {
-          const qualities = qualityList(song);
           return `
             <tr>
               <td>${escapeHtml(getSongName(song))}</td>
@@ -306,7 +397,7 @@ const renderSongTable = (targetId, songs, prefix, downloadHandler) => {
               <td>${escapeHtml(getSongInterval(song))}</td>
               <td>
                 <select id="${prefix}-quality-${index}">
-                  ${qualities.map(q => `<option value="${q}">${escapeHtml(q)}</option>`).join('')}
+                  ${renderQualityOptions(song)}
                 </select>
               </td>
               <td><button class="primary" type="button" onclick="${downloadHandler}(${index})">下载</button></td>
@@ -367,7 +458,6 @@ const renderSearchResults = () => {
       <thead><tr><th>歌曲</th><th>歌手</th><th>专辑</th><th>时长</th><th>音质</th><th></th></tr></thead>
       <tbody>
         ${state.searchResults.map((song, index) => {
-          const qualities = qualityList(song);
           return `
             <tr>
               <td>${escapeHtml(song.name)}</td>
@@ -376,7 +466,7 @@ const renderSearchResults = () => {
               <td>${escapeHtml(song.interval || '')}</td>
               <td>
                 <select id="quality-${index}">
-                  ${qualities.map(q => `<option value="${q}">${escapeHtml(q)}</option>`).join('')}
+                  ${renderQualityOptions(song)}
                 </select>
               </td>
               <td><button class="primary" type="button" onclick="downloadSearchResult(${index})">下载</button></td>
@@ -464,34 +554,48 @@ const loadSongLists = async (page = state.songListPage) => {
   state.songLists = data.list || [];
   state.activeSongList = null;
   state.songListSongs = [];
+  state.songListDetailAllSongs = [];
+  state.songListDetailPage = 1;
   renderSongLists();
   renderSongListDetail();
+};
+
+const getSongListDetailPageCount = () => {
+  return Math.max(1, Math.ceil(state.songListDetailAllSongs.length / state.songListDetailPageSize));
 };
 
 const renderSongListDetail = () => {
   const title = state.activeSongList
     ? itemText(state.songListDetail || state.activeSongList, ['name', 'title'], '歌曲')
     : '歌曲';
+  const pageCount = getSongListDetailPageCount();
+  state.songListDetailPage = Math.max(1, Math.min(state.songListDetailPage, pageCount));
+  const start = (state.songListDetailPage - 1) * state.songListDetailPageSize;
+  state.songListSongs = state.songListDetailAllSongs.slice(start, start + state.songListDetailPageSize);
   $('songlist-detail-title').textContent = title;
   renderSongTable('songlist-detail', state.songListSongs, 'songlist', 'downloadSongListSong');
+  $('songlist-detail-page').textContent = `${state.songListDetailPage} / ${pageCount}`;
   $('songlist-detail-prev').disabled = state.songListDetailPage <= 1;
-  $('songlist-detail-next').disabled = state.songListDetailTotal > 0
-    ? state.songListDetailPage * (state.songListDetailLimit || state.songListSongs.length || 1) >= state.songListDetailTotal
-    : !state.activeSongList;
+  $('songlist-detail-next').disabled = state.songListDetailPage >= pageCount || !state.activeSongList;
   $('songlist-detail-download-page').disabled = !state.songListSongs.length;
 };
 
-const loadSongListDetail = async (page = state.songListDetailPage) => {
+const loadSongListDetail = async () => {
   const item = state.activeSongList;
   const id = songListId(item);
   const source = item?.source || $('songlist-source').value;
   if (!source || !id) return toast('歌单缺少可用 ID');
-  const data = await api(`/api/music/songList/detail?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}&page=${page}`);
+  const data = await api(`/api/music/songList/detail?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}&page=1`);
   state.songListDetail = data.info || item;
-  state.songListSongs = data.list || [];
-  state.songListDetailPage = Number(data.page || page || 1);
+  state.songListDetailAllSongs = data.list || [];
+  state.songListDetailPage = 1;
   state.songListDetailTotal = Number(data.total || 0);
   state.songListDetailLimit = Number(data.limit || data.list?.length || 0);
+  renderSongListDetail();
+};
+
+const changeSongListDetailPage = (delta) => {
+  state.songListDetailPage = Math.max(1, Math.min(getSongListDetailPageCount(), state.songListDetailPage + delta));
   renderSongListDetail();
 };
 
@@ -499,7 +603,7 @@ window.openSongList = async (index) => {
   try {
     state.activeSongList = state.songLists[index];
     state.songListDetailPage = 1;
-    await loadSongListDetail(1);
+    await loadSongListDetail();
   } catch (error) {
     toast(error.message);
   }
@@ -515,8 +619,24 @@ window.downloadSongListSong = async (index) => {
   }
 };
 
+const getLeaderBoardPageCount = () => {
+  return Math.max(1, Math.ceil(state.leaderBoards.length / state.leaderBoardPageSize));
+};
+
+const getLeaderBoardPageItems = () => {
+  const pageCount = getLeaderBoardPageCount();
+  state.leaderBoardPage = Math.max(1, Math.min(state.leaderBoardPage, pageCount));
+  const start = (state.leaderBoardPage - 1) * state.leaderBoardPageSize;
+  return state.leaderBoards.slice(start, start + state.leaderBoardPageSize);
+};
+
 const renderLeaderBoards = () => {
-  renderCompactItems('leaderboard-boards', state.leaderBoards, 'openLeaderBoard', '暂无榜单');
+  const pageCount = getLeaderBoardPageCount();
+  const pageItems = getLeaderBoardPageItems();
+  renderCompactItems('leaderboard-boards', pageItems, 'openLeaderBoard', '暂无榜单');
+  $('leaderboard-board-page').textContent = `${state.leaderBoardPage} / ${pageCount}`;
+  $('leaderboard-board-prev').disabled = state.leaderBoardPage <= 1;
+  $('leaderboard-board-next').disabled = state.leaderBoardPage >= pageCount || !state.leaderBoards.length;
 };
 
 const loadLeaderBoards = async () => {
@@ -524,6 +644,7 @@ const loadLeaderBoards = async () => {
   if (!source) return toast('暂无支持榜单的平台');
   const data = await api(`/api/music/leaderboard/boards?source=${encodeURIComponent(source)}`);
   state.leaderBoards = data.list || [];
+  state.leaderBoardPage = 1;
   state.activeLeaderBoard = null;
   state.leaderSongs = [];
   renderLeaderBoards();
@@ -534,6 +655,7 @@ const renderLeaderSongs = () => {
   const title = state.activeLeaderBoard ? itemText(state.activeLeaderBoard, ['name', 'title'], '歌曲') : '歌曲';
   $('leaderboard-title').textContent = title;
   renderSongTable('leaderboard-songs', state.leaderSongs, 'leaderboard', 'downloadLeaderSong');
+  $('leaderboard-song-page').textContent = `第 ${state.leaderPage} 页`;
   $('leaderboard-prev').disabled = state.leaderPage <= 1;
   $('leaderboard-next').disabled = state.leaderTotal > 0
     ? state.leaderPage * (state.leaderLimit || state.leaderSongs.length || 1) >= state.leaderTotal
@@ -556,7 +678,7 @@ const loadLeaderSongs = async (page = state.leaderPage) => {
 
 window.openLeaderBoard = async (index) => {
   try {
-    state.activeLeaderBoard = state.leaderBoards[index];
+    state.activeLeaderBoard = getLeaderBoardPageItems()[index];
     state.leaderPage = 1;
     await loadLeaderSongs(1);
   } catch (error) {
@@ -656,6 +778,16 @@ window.deleteFile = async (filename) => {
 
 const bindEvents = () => {
   $('admin-password').value = state.adminPassword;
+  $('opt-default-quality').addEventListener('change', () => {
+    state.defaultQuality = $('opt-default-quality').value || 'best';
+    localStorage.setItem(DEFAULT_QUALITY_STORAGE_KEY, state.defaultQuality);
+    rerenderSongViews();
+  });
+  $('opt-quality-fallback').addEventListener('change', () => {
+    state.allowQualityFallback = $('opt-quality-fallback').checked;
+    localStorage.setItem(QUALITY_FALLBACK_STORAGE_KEY, String(state.allowQualityFallback));
+  });
+
   $('admin-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     state.adminPassword = $('admin-password').value;
@@ -772,39 +904,27 @@ const bindEvents = () => {
 
   $('songlist-prev').addEventListener('click', () => loadSongLists(Math.max(1, state.songListPage - 1)).catch(error => toast(error.message)));
   $('songlist-next').addEventListener('click', () => loadSongLists(state.songListPage + 1).catch(error => toast(error.message)));
-  $('songlist-detail-prev').addEventListener('click', () => loadSongListDetail(Math.max(1, state.songListDetailPage - 1)).catch(error => toast(error.message)));
-  $('songlist-detail-next').addEventListener('click', () => loadSongListDetail(state.songListDetailPage + 1).catch(error => toast(error.message)));
+  $('songlist-detail-prev').addEventListener('click', () => changeSongListDetailPage(-1));
+  $('songlist-detail-next').addEventListener('click', () => changeSongListDetailPage(1));
   $('songlist-detail-download-page').addEventListener('click', () => createDownloadTasks(state.songListSongs).catch(error => toast(error.message)));
 
   $('leaderboard-source').addEventListener('change', () => loadLeaderBoards().catch(error => toast(error.message)));
   $('leaderboard-refresh').addEventListener('click', () => loadLeaderBoards().catch(error => toast(error.message)));
+  $('leaderboard-board-prev').addEventListener('click', () => {
+    state.leaderBoardPage = Math.max(1, state.leaderBoardPage - 1);
+    renderLeaderBoards();
+  });
+  $('leaderboard-board-next').addEventListener('click', () => {
+    state.leaderBoardPage = Math.min(getLeaderBoardPageCount(), state.leaderBoardPage + 1);
+    renderLeaderBoards();
+  });
   $('leaderboard-prev').addEventListener('click', () => loadLeaderSongs(Math.max(1, state.leaderPage - 1)).catch(error => toast(error.message)));
   $('leaderboard-next').addEventListener('click', () => loadLeaderSongs(state.leaderPage + 1).catch(error => toast(error.message)));
   $('leaderboard-download-page').addEventListener('click', () => createDownloadTasks(state.leaderSongs).catch(error => toast(error.message)));
 
-  $('json-download').addEventListener('click', async () => {
-    try {
-      const songInfo = JSON.parse($('songinfo-json').value);
-      await createDownloadTask(songInfo, $('json-quality').value);
-    } catch (error) {
-      toast(error.message);
-    }
-  });
-
-  document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
-      document.querySelectorAll('.tab-body').forEach(item => item.classList.remove('active'));
-      tab.classList.add('active');
-      $(`tab-${tab.dataset.tab}`).classList.add('active');
-      if (tab.dataset.tab === 'songlist' && !state.songLists.length && !state.songListTags.length) {
-        loadSongListTags()
-          .then(() => loadSongLists(1))
-          .catch(error => toast(error.message));
-      }
-      if (tab.dataset.tab === 'leaderboard' && !state.leaderBoards.length) {
-        loadLeaderBoards().catch(error => toast(error.message));
-      }
+  document.querySelectorAll('.menu-item').forEach(item => {
+    item.addEventListener('click', () => {
+      activateView(item.dataset.view);
     });
   });
 
@@ -815,6 +935,7 @@ const bindEvents = () => {
 
 const init = async () => {
   bindEvents();
+  renderDownloadSettings();
   await loadConfig().catch(error => toast(error.message));
   await loadSources().catch(error => toast(error.message));
   renderSongListFilters();

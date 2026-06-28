@@ -18,46 +18,24 @@
     </form>
   </header>
 
-  <main class="layout">
-    <aside class="panel sources-panel">
-      <div class="panel-head">
-        <h2>音源</h2>
-        <button id="refresh-sources" type="button">刷新</button>
-      </div>
+  <main class="app-shell">
+    <aside class="panel sidebar">
+      <nav class="menu" aria-label="主菜单">
+        <button class="menu-item active" type="button" data-view="search">搜索下载</button>
+        <button class="menu-item" type="button" data-view="songlist">歌单</button>
+        <button class="menu-item" type="button" data-view="leaderboard">榜单</button>
+        <button class="menu-item" type="button" data-view="sources">音源</button>
+        <button class="menu-item" type="button" data-view="tasks">任务</button>
+        <button class="menu-item" type="button" data-view="files">文件</button>
+      </nav>
 
-      <form id="source-url-form" class="stack">
-        <label for="source-url">URL 导入</label>
-        <div class="inline">
-          <input id="source-url" type="url" placeholder="https://example.com/source.js">
-          <button type="submit">导入</button>
-        </div>
-      </form>
-
-      <form id="source-file-form" class="stack">
-        <label for="source-file">文件上传</label>
-        <div class="inline">
-          <input id="source-file" type="file" accept=".js,text/javascript">
-          <button type="submit">上传</button>
-        </div>
-      </form>
-
-      <label class="checkline">
-        <input id="allow-unsafe-vm" type="checkbox">
-        <span>允许 unsafe VM</span>
-      </label>
-
-      <div id="sources-list" class="list"></div>
     </aside>
 
-    <section class="panel work-panel">
-      <div class="tabs">
-        <button class="tab active" type="button" data-tab="search">搜索</button>
-        <button class="tab" type="button" data-tab="songlist">歌单</button>
-        <button class="tab" type="button" data-tab="leaderboard">榜单</button>
-        <button class="tab" type="button" data-tab="json">songInfo</button>
-      </div>
-
-      <section id="tab-search" class="tab-body active">
+    <section class="content">
+      <section id="view-search" class="panel view-section active">
+        <div class="panel-head">
+          <h2>搜索下载</h2>
+        </div>
         <form id="search-form" class="searchbar">
           <select id="search-source"></select>
           <input id="search-keyword" type="search" placeholder="歌曲 / 歌手">
@@ -66,7 +44,10 @@
         <div id="search-results" class="table-wrap"></div>
       </section>
 
-      <section id="tab-songlist" class="tab-body">
+      <section id="view-songlist" class="panel view-section">
+        <div class="panel-head">
+          <h2>歌单</h2>
+        </div>
         <div class="stack">
           <form id="songlist-search-form" class="searchbar">
             <select id="songlist-source"></select>
@@ -100,6 +81,7 @@
               <h3 id="songlist-detail-title">歌曲</h3>
               <div class="row-actions">
                 <button id="songlist-detail-download-page" type="button">下载本页</button>
+                <span id="songlist-detail-page" class="page-label">1 / 1</span>
                 <button id="songlist-detail-prev" type="button">上一页</button>
                 <button id="songlist-detail-next" type="button">下一页</button>
               </div>
@@ -109,7 +91,10 @@
         </div>
       </section>
 
-      <section id="tab-leaderboard" class="tab-body">
+      <section id="view-leaderboard" class="panel view-section">
+        <div class="panel-head">
+          <h2>榜单</h2>
+        </div>
         <div class="filterbar stack-tight">
           <select id="leaderboard-source"></select>
           <button id="leaderboard-refresh" type="button">刷新榜单</button>
@@ -118,6 +103,11 @@
           <div>
             <div class="subhead">
               <h3>榜单</h3>
+              <div class="row-actions">
+                <span id="leaderboard-board-page" class="page-label">1 / 1</span>
+                <button id="leaderboard-board-prev" type="button">上一页</button>
+                <button id="leaderboard-board-next" type="button">下一页</button>
+              </div>
             </div>
             <div id="leaderboard-boards" class="compact-list"></div>
           </div>
@@ -126,6 +116,7 @@
               <h3 id="leaderboard-title">歌曲</h3>
               <div class="row-actions">
                 <button id="leaderboard-download-page" type="button">下载本页</button>
+                <span id="leaderboard-song-page" class="page-label">1</span>
                 <button id="leaderboard-prev" type="button">上一页</button>
                 <button id="leaderboard-next" type="button">下一页</button>
               </div>
@@ -135,48 +126,70 @@
         </div>
       </section>
 
-      <section id="tab-json" class="tab-body">
-        <div class="json-grid">
-          <textarea id="songinfo-json" spellcheck="false" placeholder='{"source":"kw","name":"...","singer":"...","songmid":"..."}'></textarea>
-          <div class="stack">
-            <label for="json-quality">音质</label>
-            <select id="json-quality">
-              <option value="128k">128k</option>
-              <option value="192k">192k</option>
-              <option value="320k" selected>320k</option>
-              <option value="flac">flac</option>
-              <option value="flac24bit">flac24bit</option>
-              <option value="master">master</option>
-            </select>
-            <button id="json-download" type="button">创建任务</button>
+      <section id="view-sources" class="panel view-section">
+        <div class="panel-head">
+          <h2>音源</h2>
+          <button id="refresh-sources" type="button">刷新</button>
+        </div>
+
+        <div class="download-options">
+          <h3>下载选项</h3>
+          <div class="option-field">
+            <label for="opt-default-quality">默认音质</label>
+            <select id="opt-default-quality"></select>
           </div>
+          <label><input id="opt-quality-fallback" type="checkbox" checked>自动降级</label>
+          <label><input id="opt-cover" type="checkbox" checked>封面</label>
+          <label><input id="opt-lyric" type="checkbox" checked>歌词</label>
+          <label><input id="opt-tags" type="checkbox" checked>标签</label>
+          <label><input id="opt-verify" type="checkbox" checked>检查</label>
+        </div>
+
+        <div class="source-grid">
+          <div>
+            <form id="source-url-form" class="stack">
+              <label for="source-url">URL 导入</label>
+              <div class="inline">
+                <input id="source-url" type="url" placeholder="https://example.com/source.js">
+                <button type="submit">导入</button>
+              </div>
+            </form>
+
+            <form id="source-file-form" class="stack">
+              <label for="source-file">文件上传</label>
+              <div class="inline">
+                <input id="source-file" type="file" accept=".js,text/javascript">
+                <button type="submit">上传</button>
+              </div>
+            </form>
+
+            <label class="checkline">
+              <input id="allow-unsafe-vm" type="checkbox">
+              <span>允许 unsafe VM</span>
+            </label>
+          </div>
+
+          <div id="sources-list" class="list"></div>
         </div>
       </section>
 
-      <div class="options-line">
-        <label><input id="opt-cover" type="checkbox" checked>封面</label>
-        <label><input id="opt-lyric" type="checkbox" checked>歌词</label>
-        <label><input id="opt-tags" type="checkbox" checked>标签</label>
-        <label><input id="opt-verify" type="checkbox" checked>检查</label>
-      </div>
+      <section id="view-tasks" class="panel view-section">
+        <div class="panel-head">
+          <h2>任务</h2>
+          <button id="refresh-tasks" type="button">刷新</button>
+        </div>
+        <div id="tasks-list" class="list task-list"></div>
+      </section>
+
+      <section id="view-files" class="panel view-section">
+        <div class="panel-head">
+          <h2>文件</h2>
+          <button id="refresh-files" type="button">刷新</button>
+        </div>
+        <div id="files-list" class="table-wrap"></div>
+      </section>
     </section>
-
-    <aside class="panel tasks-panel">
-      <div class="panel-head">
-        <h2>任务</h2>
-        <button id="refresh-tasks" type="button">刷新</button>
-      </div>
-      <div id="tasks-list" class="list"></div>
-    </aside>
   </main>
-
-  <section class="panel files-panel">
-    <div class="panel-head">
-      <h2>文件</h2>
-      <button id="refresh-files" type="button">刷新</button>
-    </div>
-    <div id="files-list" class="table-wrap"></div>
-  </section>
 
   <div id="toast" class="toast" hidden></div>
 

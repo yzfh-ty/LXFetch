@@ -212,6 +212,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const result = await resolveMusicUrl({
         songInfo: body.songInfo,
         quality: body.quality,
+        allowQualityFallback: body.allowQualityFallback ?? body.options?.allowQualityFallback,
         enableAutoSwitchApiSource: body.enableAutoSwitchApiSource,
       })
       sendJson(res, 200, { success: true, ...result })
@@ -228,6 +229,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
         const task = downloadTaskManager.createTask({
           songInfo: body.songInfo,
           quality: body.quality,
+          allowQualityFallback: body.allowQualityFallback ?? body.options?.allowQualityFallback,
           url: body.url,
           options: body.options,
         })

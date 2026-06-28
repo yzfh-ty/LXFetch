@@ -82,9 +82,9 @@ textarea {
   gap: 8px;
 }
 
-.layout {
+.app-shell {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) 1fr minmax(300px, 390px);
+  grid-template-columns: 220px minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
   align-items: start;
@@ -97,14 +97,84 @@ textarea {
   box-shadow: var(--shadow);
 }
 
-.sources-panel, .work-panel, .tasks-panel {
-  min-height: calc(100vh - 92px);
+.sidebar {
+  position: sticky;
+  top: 78px;
   padding: 14px;
 }
 
-.files-panel {
-  margin: 0 14px 14px;
+.content {
+  min-width: 0;
+}
+
+.view-section {
+  display: none;
   padding: 14px;
+  min-height: calc(100vh - 92px);
+}
+
+.view-section.active {
+  display: block;
+}
+
+.menu {
+  display: grid;
+  gap: 6px;
+}
+
+.menu-item {
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+  padding: 9px 10px;
+}
+
+.menu-item.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.download-options {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) repeat(5, max-content);
+  gap: 10px 14px;
+  align-items: center;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafbfc;
+}
+
+.download-options h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.download-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+}
+
+.download-options .option-field {
+  display: grid;
+  gap: 5px;
+  align-items: start;
+}
+
+.download-options .option-field label {
+  display: block;
+  color: var(--muted);
+}
+
+.download-options .option-field select {
+  width: 100%;
 }
 
 .panel-head {
@@ -132,11 +202,18 @@ textarea {
   gap: 8px;
 }
 
-.checkline, .options-line label {
+.checkline {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--muted);
+}
+
+.source-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
 }
 
 .list {
@@ -186,30 +263,15 @@ textarea {
 .row-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 
-.tabs {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  overflow: hidden;
-  margin-bottom: 12px;
+.page-label {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
-
-.tab {
-  border: 0;
-  border-radius: 0;
-  padding: 8px 14px;
-}
-
-.tab.active {
-  background: var(--accent);
-  color: #fff;
-}
-
-.tab-body { display: none; }
-.tab-body.active { display: block; }
 
 .searchbar {
   display: grid;
@@ -295,21 +357,6 @@ textarea {
   -webkit-box-orient: vertical;
 }
 
-.json-grid {
-  display: grid;
-  grid-template-columns: 1fr 170px;
-  gap: 12px;
-}
-
-.options-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
 .table-wrap {
   overflow: auto;
 }
@@ -360,10 +407,33 @@ th {
 }
 
 @media (max-width: 1100px) {
-  .layout {
+  .app-shell {
     grid-template-columns: 1fr;
   }
-  .sources-panel, .work-panel, .tasks-panel {
+  .sidebar {
+    position: static;
+  }
+  .menu {
+    grid-template-columns: repeat(6, minmax(92px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .menu-item {
+    text-align: center;
+    white-space: nowrap;
+  }
+  .download-options {
+    grid-template-columns: repeat(4, max-content);
+    align-items: center;
+  }
+  .download-options .option-field {
+    grid-column: span 2;
+    min-width: 160px;
+  }
+  .download-options h3 {
+    grid-column: 1 / -1;
+  }
+  .view-section {
     min-height: auto;
   }
 }
@@ -376,13 +446,16 @@ th {
     gap: 10px;
     padding: 12px;
   }
-  .admin-form, .searchbar, .filterbar, .filterbar.stack-tight, .browser-grid, .board-grid, .json-grid, .inline {
+  .admin-form, .searchbar, .filterbar, .filterbar.stack-tight, .browser-grid, .board-grid, .inline, .source-grid {
     grid-template-columns: 1fr;
   }
-  .layout {
+  .app-shell {
     padding: 10px;
   }
-  .files-panel {
-    margin: 0 10px 10px;
+  .sidebar, .view-section {
+    padding: 12px;
+  }
+  .download-options {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
