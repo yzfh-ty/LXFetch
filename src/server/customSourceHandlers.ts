@@ -4,9 +4,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { appConfig, scriptsDir, sourcesDir } from '../config'
 import { readJson, sendError, sendJson } from './http'
 import { extractMetadata, getApiStatus, initUserApis, loadUserApi } from './userApi'
+// @ts-ignore copied music SDK helper is JavaScript.
+import { httpFetch } from '../modules/utils/request.js'
 
 const sourcesMetaPath = path.join(sourcesDir, 'sources.json')
 const orderPath = path.join(sourcesDir, 'order.json')
+const MAX_SOURCE_SCRIPT_BYTES = 12 * 1024 * 1024
+const SOURCE_IMPORT_TIMEOUT_MS = 30000
 
 const ensureFiles = () => {
   if (!fs.existsSync(sourcesDir)) fs.mkdirSync(sourcesDir, { recursive: true })
@@ -46,14 +50,23 @@ const fetchScript = async (url: string): Promise<string> => {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Only http and https URLs are supported')
   }
-  const response = await fetch(url, {
-    redirect: 'follow',
+  const requestObj = httpFetch(url, {
+    method: 'get',
+    timeout: SOURCE_IMPORT_TIMEOUT_MS,
+    format: 'text',
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
   })
-  if (!response.ok) throw new Error(`Failed to download: status code ${response.status}`)
-  return await response.text()
+  const response = await requestObj.promise
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`Failed to download: status code ${response.statusCode}`)
+  }
+  const contentLength = Number(response.headers?.['content-length'] || 0)
+  if (contentLength > MAX_SOURCE_SCRIPT_BYTES) throw new Error('Source script is too large')
+  const script = String(response.body || '')
+  if (Buffer.byteLength(script, 'utf8') > MAX_SOURCE_SCRIPT_BYTES) throw new Error('Source script is too large')
+  return script
 }
 
 const analyzeScript = async (script: string, allowUnsafeVM = false) => {
@@ -104,11 +117,20 @@ const analyzeScript = async (script: string, allowUnsafeVM = false) => {
 const saveScript = async (filename: string, script: string, allowUnsafeVM = false, sourceUrl?: string) => {
   const analysis = await analyzeScript(script, allowUnsafeVM)
   if (!analysis.valid) {
+    if (analysis.requireUnsafe && !appConfig.source.allowUnsafeVM) {
+      return {
+        success: false,
+        disabledVM: true,
+        error: 'VM_DISABLED',
+        message: '配置已禁用 unsafe VM，无法导入需要原生 VM 的音源',
+        metadata: analysis.metadata,
+      }
+    }
     if (analysis.requireUnsafe && !allowUnsafeVM) {
       return {
         success: false,
         requireUnsafe: true,
-        disabledVM: !appConfig.source.allowUnsafeVM,
+        disabledVM: false,
         error: analysis.error,
         metadata: analysis.metadata,
       }

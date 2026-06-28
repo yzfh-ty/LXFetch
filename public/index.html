@@ -24,6 +24,7 @@
         <button class="menu-item active" type="button" data-view="search">搜索下载</button>
         <button class="menu-item" type="button" data-view="songlist">歌单</button>
         <button class="menu-item" type="button" data-view="leaderboard">榜单</button>
+        <button class="menu-item" type="button" data-view="subscriptions">订阅</button>
         <button class="menu-item" type="button" data-view="sources">音源</button>
         <button class="menu-item" type="button" data-view="tasks">任务</button>
         <button class="menu-item" type="button" data-view="files">文件</button>
@@ -80,6 +81,7 @@
             <div class="subhead">
               <h3 id="songlist-detail-title">歌曲</h3>
               <div class="row-actions">
+                <button id="songlist-subscribe" type="button">订阅歌单</button>
                 <button id="songlist-detail-download-page" type="button">下载本页</button>
                 <span id="songlist-detail-page" class="page-label">1 / 1</span>
                 <button id="songlist-detail-prev" type="button">上一页</button>
@@ -115,6 +117,7 @@
             <div class="subhead">
               <h3 id="leaderboard-title">歌曲</h3>
               <div class="row-actions">
+                <button id="leaderboard-subscribe" type="button">订阅榜单</button>
                 <button id="leaderboard-download-page" type="button">下载本页</button>
                 <span id="leaderboard-song-page" class="page-label">1</span>
                 <button id="leaderboard-prev" type="button">上一页</button>
@@ -126,6 +129,27 @@
         </div>
       </section>
 
+      <section id="view-subscriptions" class="panel view-section">
+        <div class="panel-head">
+          <h2>订阅</h2>
+          <button id="refresh-subscriptions" type="button">刷新</button>
+        </div>
+        <div class="subscription-toolbar">
+          <h3>新订阅默认设置</h3>
+          <div class="option-field">
+            <label for="subscription-interval">更新间隔</label>
+            <select id="subscription-interval">
+              <option value="60">1 小时</option>
+              <option value="180">3 小时</option>
+              <option value="360" selected>6 小时</option>
+              <option value="720">12 小时</option>
+              <option value="1440">24 小时</option>
+            </select>
+          </div>
+        </div>
+        <div id="subscriptions-list" class="list"></div>
+      </section>
+
       <section id="view-sources" class="panel view-section">
         <div class="panel-head">
           <h2>音源</h2>
@@ -134,15 +158,11 @@
 
         <div class="download-options">
           <h3>下载选项</h3>
-          <div class="option-field">
-            <label for="opt-default-quality">默认音质</label>
-            <select id="opt-default-quality"></select>
-          </div>
-          <label><input id="opt-quality-fallback" type="checkbox" checked>自动降级</label>
           <label><input id="opt-cover" type="checkbox" checked>封面</label>
           <label><input id="opt-lyric" type="checkbox" checked>歌词</label>
           <label><input id="opt-tags" type="checkbox" checked>标签</label>
           <label><input id="opt-verify" type="checkbox" checked>检查</label>
+          <span id="netease-cookie-status" class="badge warn">网易云 Cookie 未启用</span>
         </div>
 
         <div class="source-grid">

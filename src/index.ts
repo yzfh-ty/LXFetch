@@ -3,6 +3,7 @@ import { appConfig, ensureRuntimeDirs, installGlobalCompatibility } from './conf
 import { handleRequest } from './server/router'
 import { initUserApis } from './server/userApi'
 import { initMusicSdk } from './server/musicResolver'
+import { subscriptionManager } from './server/subscriptionManager'
 
 const start = async () => {
   ensureRuntimeDirs()
@@ -12,6 +13,7 @@ const start = async () => {
   await initMusicSdk().catch(error => {
     console.warn('[lxfetch] musicSdk init failed:', error.message)
   })
+  subscriptionManager.startScheduler()
 
   const server = http.createServer((req, res) => {
     void handleRequest(req, res)

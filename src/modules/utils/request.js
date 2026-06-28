@@ -3,56 +3,6 @@ import { debugRequest } from './env'
 import { requestMsg } from './message'
 import { bHh } from './musicSdk/options'
 import { deflateRaw } from 'zlib'
-import * as tunnel from 'tunnel'
-
-
-const httpsRxp = /^https:/
-
-// Mock proxy config from global.lx.config if needed, or environment variables
-const getRequestAgent = async url => {
-    const config = global.lx?.config || {}
-    const proxyEnabled = config['proxy.all.enabled']
-    const proxyAddress = config['proxy.all.address']
-
-    if (proxyEnabled && proxyAddress) {
-        try {
-            const proxyUrl = new URL(proxyAddress)
-            if (proxyUrl.protocol === 'http:' || proxyUrl.protocol === 'https:') {
-                const isHttps = httpsRxp.test(url)
-                const tunnelOptions = {
-                    proxy: {
-                        host: proxyUrl.hostname,
-                        port: proxyUrl.port,
-                        proxyAuth: proxyUrl.username ? `${proxyUrl.username}:${proxyUrl.password}` : undefined
-                    }
-                }
-                return (isHttps ? tunnel.httpsOverHttp : tunnel.httpOverHttp)(tunnelOptions)
-            } else if (proxyUrl.protocol.startsWith('socks')) {
-                const { SocksProxyAgent } = await import('socks-proxy-agent')
-                return new SocksProxyAgent(proxyAddress)
-            }
-        } catch (e) {
-            // console.error('[Request] Invalid proxy address:', proxyAddress, e)
-        }
-    }
-
-    if (process.env.HTTPS_PROXY) {
-        try {
-            const proxyUrl = new URL(process.env.HTTPS_PROXY)
-            const tunnelOptions = {
-                proxy: {
-                    host: proxyUrl.hostname,
-                    port: proxyUrl.port,
-                    proxyAuth: proxyUrl.username ? `${proxyUrl.username}:${proxyUrl.password}` : undefined
-                }
-            }
-            return (httpsRxp.test(url) ? tunnel.httpsOverHttp : tunnel.httpOverHttp)(tunnelOptions)
-        } catch (e) { }
-    }
-
-    return undefined
-}
-
 
 const request = (url, options, callback) => {
     let data
@@ -271,7 +221,6 @@ const fetchData = async (url, method, {
         method,
         headers: Object.assign({}, defaultHeaders, headers),
         timeout,
-        agent: await getRequestAgent(url),
         json: format === 'json',
         rejectUnauthorized: false,
     }, (err, resp, body) => {

@@ -5,7 +5,13 @@ import zlib from 'node:zlib'
 import { promisify } from 'node:util'
 import vm from 'node:vm'
 import { VM } from 'vm2'
+import needle from 'needle'
 import { appConfig, scriptsDir, sourcesDir } from '../config'
+import {
+  getNeteaseCookieSourceName,
+  isNeteaseCookieResolverEnabled,
+  resolveNeteaseCookieMusicUrl,
+} from './neteaseCookieResolver'
 
 const inflate = promisify(zlib.inflate)
 const deflate = promisify(zlib.deflate)
@@ -32,6 +38,40 @@ interface LoadedApi {
 
 const loadedApis = new Map<string, LoadedApi>()
 const apiStatus = new Map<string, { status: 'success' | 'failed', error?: string }>()
+let sourceUnhandledRejectionHandlerInstalled = false
+
+const DESKTOP_SOURCE_QUALITIES: Record<string, string[]> = {
+  kw: ['128k', '320k', 'flac', 'flac24bit'],
+  kg: ['128k', '320k', 'flac', 'flac24bit'],
+  tx: ['128k', '320k', 'flac', 'flac24bit'],
+  wy: ['128k', '320k', 'flac', 'flac24bit'],
+  mg: ['128k', '320k', 'flac', 'flac24bit'],
+  local: [],
+}
+
+const DESKTOP_SOURCE_ACTIONS: Record<string, string[]> = {
+  kw: ['musicUrl'],
+  kg: ['musicUrl'],
+  tx: ['musicUrl'],
+  wy: ['musicUrl'],
+  mg: ['musicUrl'],
+  local: ['musicUrl', 'lyric', 'pic'],
+}
+
+const toRuntimeErrorMessage = (error: any) => {
+  if (!error) return 'unknown'
+  if (typeof error === 'string') return error
+  if (error.message) return String(error.message)
+  try { return JSON.stringify(decontextify(error)) } catch { return String(error) }
+}
+
+const ensureSourceUnhandledRejectionHandler = () => {
+  if (sourceUnhandledRejectionHandlerInstalled) return
+  sourceUnhandledRejectionHandlerInstalled = true
+  process.on('unhandledRejection', reason => {
+    console.warn('[UserApi] ignored unhandled source rejection:', toRuntimeErrorMessage(reason))
+  })
+}
 
 const decontextify = (obj: any): any => {
   if (obj === null || obj === undefined) return obj
@@ -89,54 +129,161 @@ export const extractMetadata = (script: string): Partial<UserApiInfo> => {
   return meta
 }
 
-const createLxRequest = () => {
+const toBuffer = (value: any, encoding?: BufferEncoding): Buffer => {
+  const data = decontextify(value)
+  if (Buffer.isBuffer(data)) return Buffer.from(data)
+  if (data instanceof Uint8Array) return Buffer.from(data)
+  return Buffer.from(data, encoding)
+}
+
+const getAesAlgorithm = (mode: string, key: Buffer) => {
+  const value = String(decontextify(mode) || '').toLowerCase()
+  if (/^aes-\d+-.+/.test(value)) return value
+  return `aes-${key.length * 8}-${value}`
+}
+
+const getAesIv = (algorithm: string, iv: any) => {
+  if (algorithm.includes('-ecb')) return null
+  if (iv == null) return null
+  const data = decontextify(iv)
+  if (data == null) return null
+  if (Buffer.isBuffer(data)) return Buffer.from(data)
+  if (data instanceof Uint8Array) return Buffer.from(data)
+  if (data === '') return null
+  return Buffer.from(data)
+}
+
+const desktopAesEncrypt = (buffer: any, mode: string, key: any, iv: any) => {
+  const dKey = toBuffer(key)
+  const dBuffer = toBuffer(buffer)
+  const algorithm = getAesAlgorithm(mode, dKey)
+  const cipher = crypto.createCipheriv(algorithm as any, dKey, getAesIv(algorithm, iv) as any)
+  return Buffer.concat([cipher.update(dBuffer), cipher.final()])
+}
+
+const desktopAesDecrypt = (buffer: any, mode: string, key: any, iv: any) => {
+  const dKey = toBuffer(key)
+  const dBuffer = toBuffer(buffer)
+  const algorithm = getAesAlgorithm(mode, dKey)
+  const decipher = crypto.createDecipheriv(algorithm as any, dKey, getAesIv(algorithm, iv) as any)
+  return Buffer.concat([decipher.update(dBuffer), decipher.final()])
+}
+
+const desktopRsaEncrypt = (buffer: any, key: any) => {
+  let dBuffer = toBuffer(buffer)
+  if (dBuffer.length < 128) dBuffer = Buffer.concat([Buffer.alloc(128 - dBuffer.length), dBuffer])
+  return crypto.publicEncrypt({
+    key: decontextify(key),
+    padding: crypto.constants.RSA_NO_PADDING,
+  }, dBuffer)
+}
+
+const normalizeStringList = (list: any) => {
+  if (!Array.isArray(list)) return []
+  return list.filter((item: any): item is string => typeof item === 'string')
+}
+
+const filterRegisteredSources = (sources: any): Record<string, any> => {
+  const result: Record<string, any> = {}
+  if (!sources || typeof sources !== 'object') return result
+
+  for (const source of Object.keys(DESKTOP_SOURCE_QUALITIES)) {
+    const sourceInfo = sources[source]
+    if (!sourceInfo || sourceInfo.type !== 'music') continue
+    const userActions = normalizeStringList(sourceInfo.actions)
+    const userQualitys = normalizeStringList(sourceInfo.qualitys)
+    const actions = (DESKTOP_SOURCE_ACTIONS[source] || []).filter(action => userActions.includes(action))
+    const qualitys = DESKTOP_SOURCE_QUALITIES[source].filter(quality => userQualitys.includes(quality))
+    if (!actions.length) continue
+    result[source] = {
+      ...decontextify(sourceInfo),
+      type: 'music',
+      actions,
+      qualitys,
+    }
+  }
+
+  return result
+}
+
+const createLxRequest = (isUnsafe = false) => {
   return (url: string, options: any = {}, callback: Function) => {
     const safeOptions = decontextify(options || {})
-    const method = String(safeOptions.method || 'get').toUpperCase()
-    const headers = { ...(safeOptions.headers || {}) }
-    const controller = new AbortController()
-    const timeoutMs = typeof safeOptions.timeout === 'number' && safeOptions.timeout > 0
-      ? Math.min(safeOptions.timeout, 60000)
-      : 60000
-
-    let body: any = safeOptions.body
-    if (safeOptions.form) {
-      body = new URLSearchParams(safeOptions.form).toString()
-      if (!headers['Content-Type'] && !headers['content-type']) {
-        headers['Content-Type'] = 'application/x-www-form-urlencoded'
-      }
-    } else if (safeOptions.formData) {
-      body = safeOptions.formData
+    const { method = 'get', timeout, headers, body, form, formData } = safeOptions
+    const requestOptions: any = {
+      headers,
+      response_timeout: typeof timeout === 'number' && timeout > 0 ? Math.min(timeout, 60000) : 60000,
     }
 
-    const timer = setTimeout(() => { controller.abort() }, timeoutMs)
+    let data = body
+    if (safeOptions.form) {
+      data = form
+      requestOptions.json = false
+    } else if (formData) {
+      data = formData
+      requestOptions.json = false
+    }
 
-    fetch(url, {
-      method,
-      headers,
-      body: method === 'GET' || method === 'HEAD' ? undefined : body,
-      signal: controller.signal,
-    }).then(async response => {
-      clearTimeout(timer)
-      const buffer = Buffer.from(await response.arrayBuffer())
-      const text = buffer.toString('utf8')
-      let parsedBody: any = text
-      try { parsedBody = JSON.parse(text) } catch {}
-
-      const safeResp = {
-        statusCode: response.status,
-        statusMessage: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: decontextify(parsedBody),
-        raw: buffer,
+    const callSourceCallback = (...args: any[]) => {
+      if (typeof callback !== 'function') return
+      try {
+        const result = callback.call(null, ...args)
+        if (result && typeof result.catch === 'function') {
+          result.catch((error: any) => {
+            console.warn('[UserApi] ignored async source request callback error:', toRuntimeErrorMessage(error))
+          })
+        }
+      } catch (error: any) {
+        console.warn('[UserApi] ignored source request callback error:', toRuntimeErrorMessage(error))
       }
-      callback.call(null, null, safeResp, safeResp.body)
-    }).catch(error => {
-      clearTimeout(timer)
-      callback.call(null, decontextify(error), null, null)
+    }
+
+    const request = needle.request(method, url, data, requestOptions, (err: any, resp: any, responseBody: any) => {
+      try {
+        if (err) {
+          callSourceCallback(decontextify(err), null, null)
+          return
+        }
+
+        let parsedBody: any = resp?.raw ? resp.raw.toString() : responseBody
+        if (parsedBody === undefined && resp?.body !== undefined) parsedBody = resp.body
+        if (typeof parsedBody === 'string') {
+          try { parsedBody = JSON.parse(parsedBody) } catch {}
+        }
+
+        let safeResp: any = {
+          statusCode: resp.statusCode,
+          statusMessage: resp.statusMessage,
+          headers: resp.headers,
+          bytes: resp.bytes,
+          body: decontextify(parsedBody),
+          raw: resp.raw ? Buffer.from(resp.raw) : undefined,
+        }
+
+        if (isUnsafe) {
+          const jsonBody = (parsedBody && typeof parsedBody === 'object' && !Buffer.isBuffer(parsedBody))
+            ? JSON.parse(JSON.stringify(parsedBody))
+            : parsedBody
+          safeResp = JSON.parse(JSON.stringify({
+            statusCode: resp.statusCode,
+            statusMessage: resp.statusMessage,
+            headers: resp.headers,
+            bytes: resp.bytes,
+          }))
+          safeResp.body = jsonBody
+          safeResp.raw = resp.raw ? Buffer.from(resp.raw) : undefined
+        }
+
+        callSourceCallback(null, safeResp, safeResp.body)
+      } catch (error: any) {
+        callSourceCallback(decontextify(error), null, null)
+      }
     })
 
-    return () => { controller.abort() }
+    return () => {
+      const reqObj = (request as any).request || request
+      if (reqObj && !reqObj.aborted) reqObj.abort?.()
+    }
   }
 }
 
@@ -145,6 +292,7 @@ const normalizeResultUrl = (result: any): string => {
   if (typeof value === 'string') return value
   if (value?.url && typeof value.url === 'string') return value.url
   if (value?.data && typeof value.data === 'string') return value.data
+  if (value?.data?.url && typeof value.data.url === 'string') return value.data.url
   throw new Error('音源没有返回有效下载链接')
 }
 
@@ -211,6 +359,9 @@ const containerRank = (ext: string) => {
   if (['mp3', 'mpga'].includes(value)) return 2000
   return 1000
 }
+
+const LOSSLESS_QUALITIES = new Set(['master', 'flac24bit', 'flac', 'wav', 'ape'])
+const LOSSY_EXTS = new Set(['mp3', 'mpga', 'aac', 'ogg', 'opus'])
 
 const contentRangeTotal = (value: string | null) => {
   if (!value) return 0
@@ -299,6 +450,91 @@ const probeUrlQuality = async (url: string, songInfo: any, quality: string): Pro
   return result
 }
 
+const getProbeQualityMismatch = (probe: QualityProbe, songInfo: any, quality: string) => {
+  const expectedSize = getExpectedQualitySize(songInfo, quality)
+  const ext = (probe.ext || '').toLowerCase()
+
+  if (LOSSLESS_QUALITIES.has(quality) && LOSSY_EXTS.has(ext)) {
+    return `请求 ${quality}，但返回的是 ${ext}`
+  }
+
+  if (expectedSize && probe.contentLength) {
+    const ratio = probe.contentLength / expectedSize
+    if (LOSSLESS_QUALITIES.has(quality) && ratio < 0.7) {
+      return `请求 ${quality} 预期约 ${formatBytes(expectedSize)}，实际链接约 ${formatBytes(probe.contentLength)}`
+    }
+    if (!LOSSLESS_QUALITIES.has(quality) && ratio < 0.45) {
+      return `请求 ${quality} 预期约 ${formatBytes(expectedSize)}，实际链接约 ${formatBytes(probe.contentLength)}`
+    }
+  }
+
+  return ''
+}
+
+const createSandboxConsole = () => ({
+  log: () => {},
+  info: () => {},
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: () => {},
+  group: () => {},
+  groupEnd: () => {},
+  clear: () => {},
+})
+
+const createBrowserCompatibility = () => {
+  const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  const location = {
+    href: 'https://lxmusic.toside.cn/',
+    origin: 'https://lxmusic.toside.cn',
+    protocol: 'https:',
+    host: 'lxmusic.toside.cn',
+    hostname: 'lxmusic.toside.cn',
+    port: '',
+    pathname: '/',
+    search: '',
+    hash: '',
+    toString() { return this.href },
+  }
+  const document = {
+    location,
+    referrer: '',
+    cookie: '',
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    createElement: (tagName: string) => ({
+      tagName: String(tagName || '').toUpperCase(),
+      style: {},
+      children: [],
+      setAttribute() {},
+      getAttribute() { return null },
+      appendChild() {},
+      remove() {},
+      click() {},
+    }),
+    body: {
+      appendChild() {},
+      removeChild() {},
+    },
+  }
+
+  return {
+    navigator: {
+      userAgent,
+      appVersion: userAgent,
+      platform: 'Win32',
+      language: 'zh-CN',
+      languages: ['zh-CN', 'zh'],
+    },
+    location,
+    document,
+    performance: {
+      now: () => Date.now(),
+    },
+    crypto: crypto.webcrypto || crypto,
+  }
+}
+
 export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
   const metadata = extractMetadata(apiInfo.script)
   const fullApiInfo: UserApiInfo = {
@@ -319,6 +555,7 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
     initResolve = resolve
     initReject = reject
   })
+  let unhandledLoadError: Error | null = null
 
   const lxObject = {
     version: '2.0.0',
@@ -344,15 +581,9 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
       },
       crypto: {
         md5: (str: string) => crypto.createHash('md5').update((decontextify(str) || '') as any).digest('hex'),
-        aesEncrypt: (buffer: any, mode: string, key: any, iv: any) => {
-          const dKey = decontextify(key)
-          const dIv = decontextify(iv)
-          const dBuffer = decontextify(buffer)
-          const algorithm = `aes-${dKey.length * 8}-${mode}`
-          const cipher = crypto.createCipheriv(algorithm as any, dKey, dIv)
-          return Buffer.concat([cipher.update(dBuffer), cipher.final()])
-        },
-        rsaEncrypt: (buffer: any, key: any) => crypto.publicEncrypt(decontextify(key) as any, decontextify(buffer) as any),
+        aesEncrypt: desktopAesEncrypt,
+        aesDecrypt: desktopAesDecrypt,
+        rsaEncrypt: desktopRsaEncrypt,
         randomBytes: (size: number) => crypto.randomBytes(size),
       },
       zlib: {
@@ -360,23 +591,33 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
         deflate: (buffer: any) => deflate(decontextify(buffer)),
       },
     },
-    request: createLxRequest(),
+    request: createLxRequest(!!apiInfo.allowUnsafeVM && appConfig.source.allowUnsafeVM),
     send: (eventName: string, data: any) => {
-      const payload = decontextify(data)
-      if (eventName === 'inited') {
-        if (payload?.sources) registeredSources = payload.sources
-        if (initResolve) initResolve()
-      } else if (eventName === 'updateAlert') {
-        if (initReject) initReject(new Error(`发现新版本,需要更新: ${JSON.stringify(payload)}`))
-      }
+      return new Promise<void>((resolve, reject) => {
+        const payload = decontextify(data)
+        if (eventName === 'inited') {
+          registeredSources = filterRegisteredSources(payload?.sources)
+          if (initResolve) initResolve()
+          resolve()
+        } else if (eventName === 'updateAlert') {
+          resolve()
+        } else {
+          reject(new Error(`The event is not supported: ${eventName}`))
+        }
+      })
     },
     on: (eventName: string, handler: Function) => {
-      if (eventName === 'request') eventHandlers.set(eventName, handler)
+      if (eventName === 'request') {
+        eventHandlers.set(eventName, handler)
+        return Promise.resolve()
+      }
+      return Promise.reject(new Error(`The event is not supported: ${eventName}`))
     },
   }
 
+  const browserCompatibility = createBrowserCompatibility()
   const sandbox: any = {
-    console,
+    console: createSandboxConsole(),
     setTimeout,
     clearTimeout,
     setInterval,
@@ -386,6 +627,7 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
     URLSearchParams,
     TextEncoder,
     TextDecoder,
+    ...browserCompatibility,
     process: {
       nextTick: (fn: Function, ...args: any[]) => setTimeout(() => fn(...args), 0),
       env: { NODE_ENV: process.env.NODE_ENV || 'production' },
@@ -396,14 +638,27 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
     globalThis: null,
     atob: (s: string) => Buffer.from(s, 'base64').toString('binary'),
     btoa: (s: string) => Buffer.from(s, 'binary').toString('base64'),
-    crypto,
   }
   sandbox.global = sandbox
   sandbox.window = sandbox
+  sandbox.self = sandbox
   sandbox.globalThis = sandbox
 
+  const toLoadError = (error: any) => {
+    if (error instanceof Error) return error
+    const message = typeof error === 'string'
+      ? error
+      : JSON.stringify(decontextify(error))
+    return new Error(message || '未知脚本错误')
+  }
+  const unhandledRejectionHandler = (reason: any) => {
+    unhandledLoadError = toLoadError(reason)
+  }
+  process.on('unhandledRejection', unhandledRejectionHandler)
+
   try {
-    if (apiInfo.allowUnsafeVM && appConfig.source.allowUnsafeVM) {
+    const unsafeEnabled = !!apiInfo.allowUnsafeVM && appConfig.source.allowUnsafeVM
+    if (unsafeEnabled) {
       const context = vm.createContext(sandbox)
       vm.runInContext(apiInfo.script, context, {
         filename: `custom_source_${fullApiInfo.id}.js`,
@@ -429,7 +684,9 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
 
     await Promise.race([
       initPromise,
-      new Promise((_, reject) => setTimeout(() => { reject(new Error('初始化超时，请确保脚本调用了 lx.send("inited", ...)')) }, 3000)),
+      new Promise((_, reject) => setTimeout(() => {
+        reject(unhandledLoadError || new Error('初始化超时，请确保脚本调用了 lx.send("inited", ...)'))
+      }, 10000)),
     ])
 
     const apiInstance: LoadedApi = {
@@ -438,7 +695,7 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
       callRequest: async (action: string, source: string, info: any) => {
         const handler = eventHandlers.get('request')
         if (!handler) throw new Error(`源 ${fullApiInfo.name} 未注册 request 处理器`)
-        const inputData = apiInfo.allowUnsafeVM && appConfig.source.allowUnsafeVM
+        const inputData = unsafeEnabled
           ? JSON.parse(JSON.stringify({ action, source, info }))
           : { action, source, info }
         return decontextify(await handler(inputData))
@@ -451,12 +708,14 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
     return { success: true, apiInstance, error: null }
   } catch (error: any) {
     const message = String(error?.message || error)
-    const requireUnsafe = !apiInfo.allowUnsafeVM && (
+    const requireUnsafe = !(apiInfo.allowUnsafeVM && appConfig.source.allowUnsafeVM) && (
       message === 'REQUIRE_UNSAFE_VM' ||
       message.includes('初始化超时') ||
       message.toLowerCase().includes('timeout')
     )
     return { success: false, apiInstance: null, error: message, requireUnsafe }
+  } finally {
+    process.removeListener('unhandledRejection', unhandledRejectionHandler)
   }
 }
 
@@ -469,10 +728,12 @@ const readSourceMeta = (): any[] => {
 export const getApiStatus = (id: string) => apiStatus.get(id)
 
 export const initUserApis = async () => {
+  ensureSourceUnhandledRejectionHandler()
   loadedApis.clear()
   apiStatus.clear()
 
-  const sources = readSourceMeta()
+  const storedSources = readSourceMeta()
+  const sources = [...storedSources]
   const orderPath = path.join(sourcesDir, 'order.json')
   let order: string[] = []
   if (fs.existsSync(orderPath)) {
@@ -483,6 +744,7 @@ export const initUserApis = async () => {
     sources.sort((a, b) => (positions.get(a.id) ?? 999999) - (positions.get(b.id) ?? 999999))
   }
 
+  let needsSave = false
   for (const source of sources) {
     if (!source.enabled) continue
     const scriptPath = path.join(scriptsDir, source.id)
@@ -491,13 +753,14 @@ export const initUserApis = async () => {
       continue
     }
     const script = fs.readFileSync(scriptPath, 'utf8')
+    const metadata = extractMetadata(script)
     const result = await loadUserApi({
       id: source.id,
-      name: source.name,
-      description: source.description || '',
-      version: source.version || '1.0.0',
-      author: source.author || '',
-      homepage: source.homepage || '',
+      name: metadata.name || source.name,
+      description: metadata.description || source.description || '',
+      version: metadata.version || source.version || '1.0.0',
+      author: metadata.author || source.author || '',
+      homepage: metadata.homepage || source.homepage || '',
       script,
       enabled: !!source.enabled,
       sources: {},
@@ -506,9 +769,30 @@ export const initUserApis = async () => {
     })
     if (result.success) {
       apiStatus.set(source.id, { status: 'success' })
+      const runtimeSources = Object.keys(result.apiInstance.info.sources || {}).sort()
+      const storedSupportedSources = Array.isArray(source.supportedSources)
+        ? [...source.supportedSources].sort()
+        : []
+      if (JSON.stringify(runtimeSources) !== JSON.stringify(storedSupportedSources)) {
+        source.supportedSources = runtimeSources
+        needsSave = true
+      }
+      for (const key of ['name', 'version', 'author', 'description', 'homepage']) {
+        const value = (metadata as any)[key]
+        if (value && source[key] !== value) {
+          source[key] = value
+          needsSave = true
+        }
+      }
     } else {
       apiStatus.set(source.id, { status: 'failed', error: result.error })
     }
+  }
+
+  if (needsSave) {
+    const updated = new Map(sources.map(source => [source.id, source]))
+    const merged = storedSources.map(source => updated.get(source.id) || source)
+    fs.writeFileSync(path.join(sourcesDir, 'sources.json'), JSON.stringify(merged, null, 2))
   }
 
   return Array.from(loadedApis.values()).length
@@ -561,6 +845,57 @@ const getOrderedCandidates = (source: string) => {
   return candidates
 }
 
+const getApiSourceQualities = (api: LoadedApi, source: string) => {
+  const sourceInfo = api.info.sources?.[source]
+  const values = new Set<string>()
+  const add = (quality: any) => {
+    if (typeof quality === 'string' && quality.trim()) values.add(quality.trim())
+  }
+  const addList = (list: any) => {
+    if (Array.isArray(list)) {
+      for (const item of list) add(item?.type || item)
+    } else if (list && typeof list === 'object') {
+      for (const key of Object.keys(list)) add(key)
+    }
+  }
+
+  addList(sourceInfo?.qualitys)
+  addList(sourceInfo?.qualities)
+  addList(sourceInfo?.types)
+  addList(sourceInfo?._types)
+  return Array.from(values)
+}
+
+export const getSupportedQualitiesForSource = (source: string): string[] => {
+  const qualities = new Set<string>()
+  let hasDeclaredQualities = false
+  for (const api of getOrderedCandidates(source)) {
+    const apiQualities = getApiSourceQualities(api, source)
+    if (!apiQualities.length) continue
+    hasDeclaredQualities = true
+    for (const quality of apiQualities) qualities.add(quality)
+  }
+  return hasDeclaredQualities ? Array.from(qualities) : []
+}
+
+const SOURCE_RESOLVE_TIMEOUT_MS = 90000
+
+const withSourceTimeout = async <T>(promise: Promise<T>, sourceName: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${sourceName} 解析超时 (${Math.round(SOURCE_RESOLVE_TIMEOUT_MS / 1000)}s)`))
+        }, SOURCE_RESOLVE_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export const callUserApiGetMusicUrl = async (
   source: string,
   songInfo: any,
@@ -576,6 +911,46 @@ export const callUserApiGetMusicUrl = async (
   const attempts: any[] = []
   let lastError: Error | null = null
 
+  const runNeteaseCookieResolver = async () => {
+    if (source !== 'wy' || !isNeteaseCookieResolverEnabled()) return null
+    const sourceName = getNeteaseCookieSourceName()
+    try {
+      const result = await withSourceTimeout(resolveNeteaseCookieMusicUrl(normalizedSongInfo, quality), sourceName)
+      let url = normalizeResultUrl(result)
+      const probe = await probeUrlQuality(url, normalizedSongInfo, quality)
+      url = probe.finalUrl || url
+      const mismatch = getProbeQualityMismatch(probe, normalizedSongInfo, quality)
+      if (mismatch) {
+        const err: any = new Error(`返回链接不符合请求音质：${mismatch}，探测结果 ${probe.label}`)
+        err.qualityMismatch = true
+        throw err
+      }
+      const attempt = {
+        name: sourceName,
+        status: 'success',
+        message: `Cookie 解析成功，探测结果：${probe.label}`,
+        probe,
+      }
+      attempts.push(attempt)
+      if (onProgress) await onProgress(attempt)
+      return { url, type: quality, sourceName, attempts, probe }
+    } catch (error: any) {
+      lastError = error
+      const attempt = {
+        name: sourceName,
+        status: 'fail',
+        retryable: !error.qualityMismatch,
+        message: `Cookie 解析失败：${error.message || String(error)}`,
+      }
+      attempts.push(attempt)
+      if (onProgress) await onProgress(attempt)
+      return null
+    }
+  }
+
+  const cookieResult = await runNeteaseCookieResolver()
+  if (cookieResult) return cookieResult
+
   if (!candidates.length) {
     const message = `未找到支持 ${source} 平台的自定义源，请在设置中添加或启用相关源`
     const attempt = { name: '系统', status: 'fail', message }
@@ -586,28 +961,37 @@ export const callUserApiGetMusicUrl = async (
     throw err
   }
 
-  const runCandidate = async (api: LoadedApi, retryLabel?: string, shouldProbe = false) => {
+  const runCandidate = async (api: LoadedApi, retryLabel?: string, _shouldProbe = false) => {
     try {
-      const result = await api.callRequest('musicUrl', source, {
+      const result = await withSourceTimeout(api.callRequest('musicUrl', source, {
         musicInfo: normalizedSongInfo,
         quality,
         type: quality,
-      })
+      }), api.info.name)
       let url = normalizeResultUrl(result)
-      let probe: QualityProbe | undefined
-      let message = retryLabel || '解析成功'
-      if (shouldProbe) {
-        probe = await probeUrlQuality(url, normalizedSongInfo, quality)
-        url = probe.finalUrl || url
-        message = `解析成功，探测结果：${probe.label}`
+      const probe = await probeUrlQuality(url, normalizedSongInfo, quality)
+      url = probe.finalUrl || url
+      const mismatch = getProbeQualityMismatch(probe, normalizedSongInfo, quality)
+      if (mismatch) {
+        const err: any = new Error(`返回链接不符合请求音质：${mismatch}，探测结果 ${probe.label}`)
+        err.qualityMismatch = true
+        throw err
       }
+      const message = retryLabel
+        ? `${retryLabel}，探测结果：${probe.label}`
+        : `解析成功，探测结果：${probe.label}`
       const attempt = { name: api.info.name, status: 'success', message, probe }
       attempts.push(attempt)
       if (onProgress) await onProgress(attempt)
       return { url, type: quality, sourceName: api.info.name, attempts, probe }
     } catch (error: any) {
       lastError = error
-      const attempt = { name: api.info.name, status: 'fail', message: retryLabel ? `${retryLabel}, 音源日志：${error.message}` : `音源日志：${error.message}` }
+      const attempt = {
+        name: api.info.name,
+        status: 'fail',
+        retryable: !error.qualityMismatch,
+        message: retryLabel ? `${retryLabel}, 音源日志：${error.message}` : `音源日志：${error.message}`,
+      }
       attempts.push(attempt)
       if (onProgress) await onProgress(attempt)
       return null
@@ -619,6 +1003,7 @@ export const callUserApiGetMusicUrl = async (
     for (let i = 0; i < 3; i++) {
       const result = await runCandidate(api, `第 ${i + 1}/3 次尝试`)
       if (result) return result
+      if ((lastError as any)?.qualityMismatch) break
       if (i < 2) await new Promise(resolve => setTimeout(resolve, 1000))
     }
   } else {

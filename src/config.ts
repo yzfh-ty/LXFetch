@@ -13,14 +13,24 @@ export interface AppConfig {
   source: {
     allowUnsafeVM: boolean
   }
+  netease: {
+    cookie: string
+    cookies?: string
+    cookieFile: string
+  }
   download: {
     dir: string
     maxConcurrent: number
+    throttleBytesPerSecond: number
     filenamePattern: string
     embedCover: boolean
     embedLyric: boolean
     writeTags: boolean
     verifyMetadata: boolean
+  }
+  subscription: {
+    maxTasksPerRun: number
+    taskCreateDelayMs: number
   }
 }
 
@@ -35,14 +45,23 @@ const defaults: AppConfig = {
   source: {
     allowUnsafeVM: false,
   },
+  netease: {
+    cookie: process.env.NETEASE_COOKIE || process.env.NETEASE_COOKIES || process.env.WY_COOKIE || '',
+    cookieFile: process.env.NETEASE_COOKIE_FILE || process.env.WY_COOKIE_FILE || '../Netease_url/cookie.txt',
+  },
   download: {
     dir: './data/downloads',
-    maxConcurrent: 3,
+    maxConcurrent: 1,
+    throttleBytesPerSecond: 0,
     filenamePattern: '{name} - {singer}',
     embedCover: true,
     embedLyric: true,
     writeTags: true,
     verifyMetadata: true,
+  },
+  subscription: {
+    maxTasksPerRun: 0,
+    taskCreateDelayMs: 1500,
   },
 }
 
@@ -52,7 +71,9 @@ const mergeConfig = (base: AppConfig, override: any): AppConfig => ({
   server: { ...base.server, ...(override.server || {}) },
   auth: { ...base.auth, ...(override.auth || {}) },
   source: { ...base.source, ...(override.source || {}) },
+  netease: { ...base.netease, ...(override.netease || {}) },
   download: { ...base.download, ...(override.download || {}) },
+  subscription: { ...base.subscription, ...(override.subscription || {}) },
 })
 
 export const loadConfig = (): AppConfig => {
@@ -68,6 +89,7 @@ export const dataDir = path.resolve(process.cwd(), 'data')
 export const sourcesDir = path.join(dataDir, 'sources')
 export const scriptsDir = path.join(sourcesDir, 'scripts')
 export const tasksFile = path.join(dataDir, 'tasks.json')
+export const subscriptionsFile = path.join(dataDir, 'subscriptions.json')
 export const downloadsDir = path.resolve(process.cwd(), appConfig.download.dir)
 export const downloadIndexFile = path.join(downloadsDir, 'downloads_index.json')
 
@@ -81,8 +103,6 @@ export const installGlobalCompatibility = () => {
   global.lx = {
     config: {
       'system.allowUnsafeVM': appConfig.source.allowUnsafeVM,
-      'proxy.all.enabled': false,
-      'proxy.all.address': '',
     },
     dataPath: dataDir,
   }

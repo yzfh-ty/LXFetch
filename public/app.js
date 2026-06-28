@@ -1,9 +1,7 @@
 const ADMIN_STORAGE_KEY = 'lxfetch_admin';
 const LEGACY_ADMIN_STORAGE_KEY = 'lxdownload_admin';
-const DEFAULT_QUALITY_STORAGE_KEY = 'lxfetch_default_quality';
-const QUALITY_FALLBACK_STORAGE_KEY = 'lxfetch_quality_fallback';
+const SUBSCRIPTION_INTERVAL_STORAGE_KEY = 'lxfetch_subscription_interval';
 
-const QUALITY_ORDER = ['master', 'flac24bit', 'flac', 'wav', 'ape', '320k', '192k', '128k'];
 const QUALITY_LABELS = {
   best: '最高可用',
   master: 'Master',
@@ -18,13 +16,13 @@ const QUALITY_LABELS = {
 
 const state = {
   adminPassword: localStorage.getItem(ADMIN_STORAGE_KEY) || localStorage.getItem(LEGACY_ADMIN_STORAGE_KEY) || '',
-  defaultQuality: localStorage.getItem(DEFAULT_QUALITY_STORAGE_KEY) || 'best',
-  allowQualityFallback: localStorage.getItem(QUALITY_FALLBACK_STORAGE_KEY) !== 'false',
   config: null,
   platforms: [],
   sources: [],
   tasks: [],
   files: [],
+  subscriptions: [],
+  subscriptionIntervalMinutes: Number(localStorage.getItem(SUBSCRIPTION_INTERVAL_STORAGE_KEY) || 360),
   searchResults: [],
   songLists: [],
   songListTags: [],
@@ -65,6 +63,18 @@ const formatSize = (bytes) => {
   return `${(bytes / Math.pow(1024, index)).toFixed(2)} ${units[index]}`;
 };
 
+const formatTime = (time) => {
+  if (!time) return '从未';
+  return new Date(time).toLocaleString();
+};
+
+const formatInterval = (minutes) => {
+  const value = Number(minutes || 0);
+  if (value >= 1440 && value % 1440 === 0) return `${value / 1440} 天`;
+  if (value >= 60 && value % 60 === 0) return `${value / 60} 小时`;
+  return `${value || 0} 分钟`;
+};
+
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, ch => ({
   '&': '&amp;',
   '<': '&lt;',
@@ -96,68 +106,17 @@ const getOptions = () => ({
 
 const qualityLabel = (quality) => QUALITY_LABELS[quality] || quality || '';
 
-const qualityRank = (quality) => {
-  const value = String(quality || '').toLowerCase();
-  if (value.includes('master')) return 90;
-  if (value.includes('flac24') || value.includes('24bit') || value.includes('hires')) return 80;
-  if (value.includes('flac') || value.includes('ape') || value.includes('wav')) return 70;
-  const bitrate = Number((value.match(/\d+/) || [0])[0]);
-  if (bitrate) return bitrate;
-  return 0;
-};
-
-const qualityList = (song) => {
-  const detected = [];
-  if (song._types) detected.push(...Object.keys(song._types));
-  if (Array.isArray(song.types)) {
-    for (const item of song.types) if (item.type && !detected.includes(item.type)) detected.push(item.type);
-  }
-  if (song.meta?._qualitys) detected.push(...Object.keys(song.meta._qualitys).filter(q => !detected.includes(q)));
-  if (Array.isArray(song.meta?.qualitys)) {
-    for (const item of song.meta.qualitys) if (item.type && !detected.includes(item.type)) detected.push(item.type);
-  }
-  const values = detected.length
-    ? detected.sort((a, b) => qualityRank(b) - qualityRank(a))
-    : [...QUALITY_ORDER];
-  for (const fallback of QUALITY_ORDER) {
-    if (!values.includes(fallback)) values.push(fallback);
-  }
-  return values;
-};
-
-const selectedDefaultQuality = () => {
-  return state.defaultQuality || 'best';
-};
-
-const renderQualityOptions = (song, selected = selectedDefaultQuality()) => {
-  const qualities = qualityList(song);
-  const values = ['best', ...qualities.filter((quality, index) => qualities.indexOf(quality) === index)];
-  const selectedValue = values.includes(selected) ? selected : 'best';
-  return values
-    .map(q => `<option value="${escapeHtml(q)}" ${q === selectedValue ? 'selected' : ''}>${escapeHtml(qualityLabel(q))}</option>`)
-    .join('');
-};
-
-const renderDownloadSettings = () => {
-  const select = $('opt-default-quality');
-  select.innerHTML = ['best', ...QUALITY_ORDER]
-    .map(q => `<option value="${escapeHtml(q)}">${escapeHtml(qualityLabel(q))}</option>`)
-    .join('');
-  select.value = ['best', ...QUALITY_ORDER].includes(state.defaultQuality) ? state.defaultQuality : 'best';
-  $('opt-quality-fallback').checked = state.allowQualityFallback;
-};
-
-const rerenderSongViews = () => {
-  renderSearchResults();
-  renderSongListDetail();
-  renderLeaderSongs();
-};
-
 const loadConfig = async () => {
   const data = await api('/api/config');
   state.config = data;
   state.platforms = data.platforms || [];
   $('server-status').textContent = data.adminRequired ? '需要管理员密码' : '本地模式';
+  const neteaseStatus = $('netease-cookie-status');
+  if (neteaseStatus) {
+    const enabled = !!data.netease?.cookieResolverEnabled;
+    neteaseStatus.textContent = enabled ? '网易云 Cookie 已启用' : '网易云 Cookie 未启用';
+    neteaseStatus.className = `badge ${enabled ? 'ok' : 'warn'}`;
+  }
   renderPlatforms();
 };
 
@@ -201,6 +160,9 @@ const activateView = (view) => {
   if (view === 'sources') {
     loadSources().catch(error => toast(error.message));
   }
+  if (view === 'subscriptions') {
+    loadSubscriptions().catch(error => toast(error.message));
+  }
 };
 
 const loadSources = async () => {
@@ -218,6 +180,7 @@ const renderSources = () => {
   el.innerHTML = state.sources.map(source => {
     const statusClass = source.status === 'success' ? 'ok' : (source.status === 'failed' ? 'fail' : 'warn');
     const platforms = (source.supportedSources || []).map(id => `<span class="badge">${escapeHtml(id)}</span>`).join('');
+    const sourceId = encodeURIComponent(source.id);
     return `
       <div class="source-item">
         <div class="item-title">
@@ -228,8 +191,8 @@ const renderSources = () => {
         <div class="badges">${platforms || '<span class="badge warn">无平台</span>'}</div>
         ${source.error ? `<div class="meta">${escapeHtml(source.error)}</div>` : ''}
         <div class="row-actions">
-          <button type="button" onclick="toggleSource('${escapeHtml(source.id)}', ${!source.enabled})">${source.enabled ? '禁用' : '启用'}</button>
-          <button type="button" class="danger" onclick="deleteSource('${escapeHtml(source.id)}')">删除</button>
+          <button type="button" onclick="toggleSource(decodeURIComponent('${sourceId}'), ${!source.enabled})">${source.enabled ? '禁用' : '启用'}</button>
+          <button type="button" class="danger" onclick="deleteSource(decodeURIComponent('${sourceId}'))">删除</button>
         </div>
       </div>
     `;
@@ -345,13 +308,24 @@ window.showAttempts = (id) => {
   alert(JSON.stringify(task?.attempts || [], null, 2));
 };
 
-const createDownloadTask = async (songInfo, quality, silent = false) => {
+const pinSongSource = (songInfo, source) => {
+  if (!source) return songInfo;
+  return {
+    ...(songInfo || {}),
+    source,
+    meta: songInfo?.meta && typeof songInfo.meta === 'object'
+      ? { ...songInfo.meta, source }
+      : songInfo?.meta,
+  };
+};
+
+const createDownloadTask = async (songInfo, silent = false, source = '') => {
+  const pinnedSongInfo = pinSongSource(songInfo, source);
   const data = await api('/api/download/tasks', {
     method: 'POST',
     body: JSON.stringify({
-      songInfo,
-      quality,
-      allowQualityFallback: state.allowQualityFallback,
+      songInfo: pinnedSongInfo,
+      source: source || pinnedSongInfo?.source,
       options: getOptions(),
     }),
   });
@@ -362,15 +336,121 @@ const createDownloadTask = async (songInfo, quality, silent = false) => {
   return data.task;
 };
 
-const createDownloadTasks = async (songs) => {
+const createDownloadTasks = async (songs, source = '') => {
   if (!songs.length) return toast('暂无可下载歌曲');
   let created = 0;
   for (const song of songs) {
-    await createDownloadTask(song, selectedDefaultQuality(), true);
+    await createDownloadTask(song, true, source);
     created += 1;
   }
   toast(`已创建 ${created} 个下载任务`);
   await loadTasks();
+};
+
+const subscriptionTypeName = (type) => ({
+  songList: '歌单',
+  leaderboard: '榜单',
+}[type] || type);
+
+const subscriptionStatusName = (status) => ({
+  idle: '空闲',
+  running: '更新中',
+  success: '成功',
+  failed: '失败',
+}[status] || status || '空闲');
+
+const subscriptionPayload = (type, item, targetId, source) => ({
+  type,
+  source,
+  targetId,
+  title: itemText(item, ['name', 'title', 'diss_name'], type === 'songList' ? '歌单' : '榜单'),
+  intervalMinutes: state.subscriptionIntervalMinutes,
+  options: getOptions(),
+});
+
+const loadSubscriptions = async () => {
+  const data = await api('/api/subscriptions');
+  state.subscriptions = data.subscriptions || [];
+  renderSubscriptions();
+};
+
+const renderSubscriptions = () => {
+  const el = $('subscriptions-list');
+  if (!state.subscriptions.length) {
+    el.innerHTML = '<div class="meta">暂无订阅</div>';
+    return;
+  }
+  el.innerHTML = state.subscriptions.map(sub => {
+    const statusClass = sub.lastRunStatus === 'success' ? 'ok' : (sub.lastRunStatus === 'failed' ? 'fail' : (sub.lastRunStatus === 'running' ? 'warn' : ''));
+    return `
+      <div class="subscription-item">
+        <div class="item-title">
+          <span>${escapeHtml(sub.title || sub.targetId)}</span>
+          <span class="badge ${statusClass}">${subscriptionStatusName(sub.lastRunStatus)}</span>
+        </div>
+        <div class="meta">${subscriptionTypeName(sub.type)} · ${escapeHtml(sub.source)} · 每 ${formatInterval(sub.intervalMinutes)} · ${qualityLabel(sub.quality)}</div>
+        <div class="badges">
+          <span class="badge ${sub.enabled ? 'ok' : 'warn'}">${sub.enabled ? '启用' : '暂停'}</span>
+          <span class="badge">发现 ${Number(sub.lastFoundCount || 0)}</span>
+          <span class="badge">新增 ${Number(sub.lastCreatedCount || 0)}</span>
+          <span class="badge">已记录 ${sub.downloadedKeys?.length || 0}</span>
+        </div>
+        <div class="meta">上次检查：${formatTime(sub.lastCheckedAt)} · 上次更新：${formatTime(sub.lastUpdatedAt)}</div>
+        ${sub.lastError ? `<div class="meta">${escapeHtml(sub.lastError)}</div>` : ''}
+        <div class="row-actions">
+          <button type="button" onclick="runSubscription('${sub.id}')">立即更新</button>
+          <button type="button" onclick="toggleSubscription('${sub.id}', ${!sub.enabled})">${sub.enabled ? '暂停' : '启用'}</button>
+          <button type="button" class="danger" onclick="deleteSubscription('${sub.id}')">删除</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+};
+
+const createSubscription = async (payload) => {
+  const data = await api('/api/subscriptions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  toast('订阅已添加，开始更新');
+  await loadSubscriptions();
+  await loadTasks().catch(() => {});
+  return data.subscription;
+};
+
+window.runSubscription = async (id) => {
+  try {
+    await api(`/api/subscriptions/${encodeURIComponent(id)}/run`, { method: 'POST' });
+    toast('已开始更新订阅');
+    await loadSubscriptions();
+    await loadTasks().catch(() => {});
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.toggleSubscription = async (id, enabled) => {
+  try {
+    await api(`/api/subscriptions/${encodeURIComponent(id)}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+    toast(enabled ? '订阅已启用' : '订阅已暂停');
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.deleteSubscription = async (id) => {
+  if (!confirm('删除该订阅？')) return;
+  try {
+    await api(`/api/subscriptions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    toast('订阅已删除');
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
 };
 
 const getSongName = (song) => song?.name || song?.songName || song?.title || song?.meta?.name || '';
@@ -395,11 +475,7 @@ const renderSongTable = (targetId, songs, prefix, downloadHandler) => {
               <td>${escapeHtml(getSongSinger(song))}</td>
               <td>${escapeHtml(getSongAlbum(song))}</td>
               <td>${escapeHtml(getSongInterval(song))}</td>
-              <td>
-                <select id="${prefix}-quality-${index}">
-                  ${renderQualityOptions(song)}
-                </select>
-              </td>
+              <td>${qualityLabel('best')}</td>
               <td><button class="primary" type="button" onclick="${downloadHandler}(${index})">下载</button></td>
             </tr>
           `;
@@ -464,11 +540,7 @@ const renderSearchResults = () => {
               <td>${escapeHtml(song.singer)}</td>
               <td>${escapeHtml(song.albumName || song.album || '')}</td>
               <td>${escapeHtml(song.interval || '')}</td>
-              <td>
-                <select id="quality-${index}">
-                  ${renderQualityOptions(song)}
-                </select>
-              </td>
+              <td>${qualityLabel('best')}</td>
               <td><button class="primary" type="button" onclick="downloadSearchResult(${index})">下载</button></td>
             </tr>
           `;
@@ -480,9 +552,8 @@ const renderSearchResults = () => {
 
 window.downloadSearchResult = async (index) => {
   const song = state.searchResults[index];
-  const quality = $(`quality-${index}`).value;
   try {
-    await createDownloadTask(song, quality);
+    await createDownloadTask(song);
   } catch (error) {
     toast(error.message);
   }
@@ -578,16 +649,17 @@ const renderSongListDetail = () => {
   $('songlist-detail-prev').disabled = state.songListDetailPage <= 1;
   $('songlist-detail-next').disabled = state.songListDetailPage >= pageCount || !state.activeSongList;
   $('songlist-detail-download-page').disabled = !state.songListSongs.length;
+  $('songlist-subscribe').disabled = !state.activeSongList;
 };
 
 const loadSongListDetail = async () => {
   const item = state.activeSongList;
   const id = songListId(item);
-  const source = item?.source || $('songlist-source').value;
+  const source = $('songlist-source').value || item?.source;
   if (!source || !id) return toast('歌单缺少可用 ID');
   const data = await api(`/api/music/songList/detail?source=${encodeURIComponent(source)}&id=${encodeURIComponent(id)}&page=1`);
   state.songListDetail = data.info || item;
-  state.songListDetailAllSongs = data.list || [];
+  state.songListDetailAllSongs = (data.list || []).map(song => pinSongSource(song, source));
   state.songListDetailPage = 1;
   state.songListDetailTotal = Number(data.total || 0);
   state.songListDetailLimit = Number(data.limit || data.list?.length || 0);
@@ -611,9 +683,21 @@ window.openSongList = async (index) => {
 
 window.downloadSongListSong = async (index) => {
   const song = state.songListSongs[index];
-  const quality = $(`songlist-quality-${index}`).value;
+  const source = $('songlist-source').value || state.activeSongList?.source;
   try {
-    await createDownloadTask(song, quality);
+    await createDownloadTask(song, false, source);
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.subscribeActiveSongList = async () => {
+  const item = state.activeSongList;
+  const targetId = songListId(item);
+  const source = $('songlist-source').value || item?.source;
+  if (!item || !source || !targetId) return toast('请先打开一个歌单');
+  try {
+    await createSubscription(subscriptionPayload('songList', item, targetId, source));
   } catch (error) {
     toast(error.message);
   }
@@ -661,15 +745,16 @@ const renderLeaderSongs = () => {
     ? state.leaderPage * (state.leaderLimit || state.leaderSongs.length || 1) >= state.leaderTotal
     : !state.activeLeaderBoard;
   $('leaderboard-download-page').disabled = !state.leaderSongs.length;
+  $('leaderboard-subscribe').disabled = !state.activeLeaderBoard;
 };
 
 const loadLeaderSongs = async (page = state.leaderPage) => {
   const item = state.activeLeaderBoard;
   const id = boardId(item);
-  const source = item?.source || $('leaderboard-source').value;
+  const source = $('leaderboard-source').value || item?.source;
   if (!source || !id) return toast('榜单缺少可用 ID');
   const data = await api(`/api/music/leaderboard/list?source=${encodeURIComponent(source)}&bangid=${encodeURIComponent(id)}&page=${page}`);
-  state.leaderSongs = data.list || [];
+  state.leaderSongs = (data.list || []).map(song => pinSongSource(song, source));
   state.leaderPage = Number(data.page || page || 1);
   state.leaderTotal = Number(data.total || 0);
   state.leaderLimit = Number(data.limit || data.list?.length || 0);
@@ -688,9 +773,21 @@ window.openLeaderBoard = async (index) => {
 
 window.downloadLeaderSong = async (index) => {
   const song = state.leaderSongs[index];
-  const quality = $(`leaderboard-quality-${index}`).value;
+  const source = $('leaderboard-source').value || state.activeLeaderBoard?.source;
   try {
-    await createDownloadTask(song, quality);
+    await createDownloadTask(song, false, source);
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.subscribeActiveLeaderBoard = async () => {
+  const item = state.activeLeaderBoard;
+  const targetId = boardId(item);
+  const source = $('leaderboard-source').value || item?.source;
+  if (!item || !source || !targetId) return toast('请先打开一个榜单');
+  try {
+    await createSubscription(subscriptionPayload('leaderboard', item, targetId, source));
   } catch (error) {
     toast(error.message);
   }
@@ -778,14 +875,10 @@ window.deleteFile = async (filename) => {
 
 const bindEvents = () => {
   $('admin-password').value = state.adminPassword;
-  $('opt-default-quality').addEventListener('change', () => {
-    state.defaultQuality = $('opt-default-quality').value || 'best';
-    localStorage.setItem(DEFAULT_QUALITY_STORAGE_KEY, state.defaultQuality);
-    rerenderSongViews();
-  });
-  $('opt-quality-fallback').addEventListener('change', () => {
-    state.allowQualityFallback = $('opt-quality-fallback').checked;
-    localStorage.setItem(QUALITY_FALLBACK_STORAGE_KEY, String(state.allowQualityFallback));
+  $('subscription-interval').value = String(state.subscriptionIntervalMinutes || 360);
+  $('subscription-interval').addEventListener('change', () => {
+    state.subscriptionIntervalMinutes = Number($('subscription-interval').value || 360);
+    localStorage.setItem(SUBSCRIPTION_INTERVAL_STORAGE_KEY, String(state.subscriptionIntervalMinutes));
   });
 
   $('admin-form').addEventListener('submit', async (event) => {
@@ -904,9 +997,13 @@ const bindEvents = () => {
 
   $('songlist-prev').addEventListener('click', () => loadSongLists(Math.max(1, state.songListPage - 1)).catch(error => toast(error.message)));
   $('songlist-next').addEventListener('click', () => loadSongLists(state.songListPage + 1).catch(error => toast(error.message)));
+  $('songlist-subscribe').addEventListener('click', () => subscribeActiveSongList());
   $('songlist-detail-prev').addEventListener('click', () => changeSongListDetailPage(-1));
   $('songlist-detail-next').addEventListener('click', () => changeSongListDetailPage(1));
-  $('songlist-detail-download-page').addEventListener('click', () => createDownloadTasks(state.songListSongs).catch(error => toast(error.message)));
+  $('songlist-detail-download-page').addEventListener('click', () => {
+    const source = $('songlist-source').value || state.activeSongList?.source;
+    createDownloadTasks(state.songListSongs, source).catch(error => toast(error.message));
+  });
 
   $('leaderboard-source').addEventListener('change', () => loadLeaderBoards().catch(error => toast(error.message)));
   $('leaderboard-refresh').addEventListener('click', () => loadLeaderBoards().catch(error => toast(error.message)));
@@ -920,7 +1017,11 @@ const bindEvents = () => {
   });
   $('leaderboard-prev').addEventListener('click', () => loadLeaderSongs(Math.max(1, state.leaderPage - 1)).catch(error => toast(error.message)));
   $('leaderboard-next').addEventListener('click', () => loadLeaderSongs(state.leaderPage + 1).catch(error => toast(error.message)));
-  $('leaderboard-download-page').addEventListener('click', () => createDownloadTasks(state.leaderSongs).catch(error => toast(error.message)));
+  $('leaderboard-subscribe').addEventListener('click', () => subscribeActiveLeaderBoard());
+  $('leaderboard-download-page').addEventListener('click', () => {
+    const source = $('leaderboard-source').value || state.activeLeaderBoard?.source;
+    createDownloadTasks(state.leaderSongs, source).catch(error => toast(error.message));
+  });
 
   document.querySelectorAll('.menu-item').forEach(item => {
     item.addEventListener('click', () => {
@@ -929,13 +1030,13 @@ const bindEvents = () => {
   });
 
   $('refresh-sources').addEventListener('click', () => loadSources().catch(error => toast(error.message)));
+  $('refresh-subscriptions').addEventListener('click', () => loadSubscriptions().catch(error => toast(error.message)));
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
   $('refresh-files').addEventListener('click', () => loadFiles().catch(error => toast(error.message)));
 };
 
 const init = async () => {
   bindEvents();
-  renderDownloadSettings();
   await loadConfig().catch(error => toast(error.message));
   await loadSources().catch(error => toast(error.message));
   renderSongListFilters();
@@ -943,10 +1044,14 @@ const init = async () => {
   renderSongListDetail();
   renderLeaderBoards();
   renderLeaderSongs();
+  await loadSubscriptions().catch(error => toast(error.message));
   await loadTasks().catch(error => toast(error.message));
   await loadFiles().catch(error => toast(error.message));
   setInterval(() => loadTasks().catch(() => {}), 1500);
   setInterval(() => loadFiles().catch(() => {}), 8000);
+  setInterval(() => {
+    if (state.activeView === 'subscriptions') loadSubscriptions().catch(() => {});
+  }, 5000);
 };
 
 void init();

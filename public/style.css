@@ -136,9 +136,10 @@ textarea {
   color: #fff;
 }
 
-.download-options {
+.download-options,
+.subscription-toolbar {
   display: grid;
-  grid-template-columns: minmax(160px, 220px) repeat(5, max-content);
+  grid-template-columns: minmax(160px, 220px) repeat(6, max-content);
   gap: 10px 14px;
   align-items: center;
   margin: 0 0 16px;
@@ -148,32 +149,37 @@ textarea {
   background: #fafbfc;
 }
 
-.download-options h3 {
+.download-options h3,
+.subscription-toolbar h3 {
   grid-column: 1 / -1;
   margin: 0;
   font-size: 13px;
   color: var(--muted);
 }
 
-.download-options label {
+.download-options label,
+.subscription-toolbar label {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   color: var(--muted);
 }
 
-.download-options .option-field {
+.download-options .option-field,
+.subscription-toolbar .option-field {
   display: grid;
   gap: 5px;
   align-items: start;
 }
 
-.download-options .option-field label {
+.download-options .option-field label,
+.subscription-toolbar .option-field label {
   display: block;
   color: var(--muted);
 }
 
-.download-options .option-field select {
+.download-options .option-field select,
+.subscription-toolbar .option-field select {
   width: 100%;
 }
 
@@ -221,7 +227,7 @@ textarea {
   gap: 8px;
 }
 
-.source-item, .task-item {
+.source-item, .task-item, .subscription-item {
   border: 1px solid var(--line);
   border-radius: 7px;
   padding: 10px;
@@ -414,7 +420,7 @@ th {
     position: static;
   }
   .menu {
-    grid-template-columns: repeat(6, minmax(92px, 1fr));
+    grid-template-columns: repeat(7, minmax(84px, 1fr));
     overflow-x: auto;
     padding-bottom: 2px;
   }
@@ -422,15 +428,18 @@ th {
     text-align: center;
     white-space: nowrap;
   }
-  .download-options {
+  .download-options,
+  .subscription-toolbar {
     grid-template-columns: repeat(4, max-content);
     align-items: center;
   }
-  .download-options .option-field {
+  .download-options .option-field,
+  .subscription-toolbar .option-field {
     grid-column: span 2;
     min-width: 160px;
   }
-  .download-options h3 {
+  .download-options h3,
+  .subscription-toolbar h3 {
     grid-column: 1 / -1;
   }
   .view-section {
@@ -455,7 +464,8 @@ th {
   .sidebar, .view-section {
     padding: 12px;
   }
-  .download-options {
+  .download-options,
+  .subscription-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

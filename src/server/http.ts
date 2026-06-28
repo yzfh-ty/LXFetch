@@ -1,11 +1,35 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+const MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024
+
 export const readBody = async (req: IncomingMessage): Promise<string> => {
   return await new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', chunk => { chunks.push(Buffer.from(chunk)) })
-    req.on('end', () => { resolve(Buffer.concat(chunks).toString('utf8')) })
-    req.on('error', reject)
+    let received = 0
+    let settled = false
+
+    const fail = (error: Error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    }
+
+    req.on('data', chunk => {
+      if (settled) return
+      const buffer = Buffer.from(chunk)
+      received += buffer.length
+      if (received > MAX_REQUEST_BODY_BYTES) {
+        fail(new Error('Request body too large'))
+        return
+      }
+      chunks.push(buffer)
+    })
+    req.on('end', () => {
+      if (settled) return
+      settled = true
+      resolve(Buffer.concat(chunks).toString('utf8'))
+    })
+    req.on('error', fail)
   })
 }
 

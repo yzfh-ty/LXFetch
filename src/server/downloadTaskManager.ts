@@ -47,13 +47,16 @@ export interface DownloadTask {
 
 interface CreateTaskInput {
   songInfo: any
-  quality: string
-  allowQualityFallback?: boolean
+  source?: string
   url?: string
   options?: Partial<DownloadTask['options']>
 }
 
+const DEFAULT_DOWNLOAD_QUALITY = 'best'
+const MAX_TERMINAL_TASK_HISTORY = 200
+const DOWNLOAD_IDLE_TIMEOUT_MS = 30000
 const activeControllers = new Map<string, AbortController>()
+const TERMINAL_STATUSES = new Set(['finished', 'failed', 'stopped'])
 
 const ensureTasksFile = () => {
   if (!fs.existsSync(path.dirname(tasksFile))) fs.mkdirSync(path.dirname(tasksFile), { recursive: true })
@@ -96,6 +99,19 @@ const uniqueFilename = (baseName: string, ext: string) => {
   return filename
 }
 
+const safeRenameSync = (src: string, dst: string) => {
+  try {
+    fs.renameSync(src, dst)
+  } catch (error) {
+    try {
+      fs.copyFileSync(src, dst)
+      fs.unlinkSync(src)
+    } catch {
+      throw error
+    }
+  }
+}
+
 const detectFileExt = async (filePath: string, headerExt: string) => {
   try {
     const { fileTypeFromFile } = await import('file-type')
@@ -135,7 +151,12 @@ class DownloadTaskManager {
 
   private saveTasks() {
     ensureTasksFile()
-    fs.writeFileSync(tasksFile, JSON.stringify(this.tasks.slice(0, 200), null, 2))
+    const activeTasks = this.tasks.filter(task => !TERMINAL_STATUSES.has(task.status))
+    const terminalTasks = this.tasks.filter(task => TERMINAL_STATUSES.has(task.status)).slice(0, MAX_TERMINAL_TASK_HISTORY)
+    const activeIds = new Set(activeTasks.map(task => task.id))
+    const terminalIds = new Set(terminalTasks.map(task => task.id))
+    const persisted = this.tasks.filter(task => activeIds.has(task.id) || terminalIds.has(task.id))
+    fs.writeFileSync(tasksFile, JSON.stringify(persisted, null, 2))
   }
 
   private touch(task: DownloadTask) {
@@ -151,16 +172,32 @@ class DownloadTaskManager {
     return this.tasks.find(task => task.id === id)
   }
 
+  private normalizeTaskSongInfo(songInfo: any, source?: string) {
+    const taskSource = String(source || songInfo?.source || songInfo?.meta?.source || '').trim()
+    if (!taskSource) throw new Error('Invalid songInfo')
+    const normalized = {
+      ...(songInfo || {}),
+      source: taskSource,
+    }
+    if (songInfo?.meta && typeof songInfo.meta === 'object') {
+      normalized.meta = {
+        ...songInfo.meta,
+        source: taskSource,
+      }
+    }
+    return normalized
+  }
+
   createTask(input: CreateTaskInput) {
-    if (!input.songInfo?.source) throw new Error('Invalid songInfo')
+    const songInfo = this.normalizeTaskSongInfo(input.songInfo, input.source)
     const now = Date.now()
     const task: DownloadTask = {
       id: createId(),
       status: 'waiting',
-      songInfo: input.songInfo,
-      source: input.songInfo.source,
-      quality: input.quality || '128k',
-      allowQualityFallback: input.allowQualityFallback ?? true,
+      songInfo,
+      source: songInfo.source,
+      quality: DEFAULT_DOWNLOAD_QUALITY,
+      allowQualityFallback: true,
       url: input.url || '',
       sourceName: '',
       attempts: [],
@@ -200,8 +237,7 @@ class DownloadTaskManager {
     if (!oldTask) throw new Error('Task not found')
     return this.createTask({
       songInfo: oldTask.songInfo,
-      quality: oldTask.quality,
-      allowQualityFallback: oldTask.allowQualityFallback ?? true,
+      source: oldTask.source,
       options: oldTask.options,
     })
   }
@@ -248,8 +284,8 @@ class DownloadTaskManager {
         this.touch(task)
         const resolved = await resolveMusicUrl({
           songInfo: task.songInfo,
-          quality: task.quality,
-          allowQualityFallback: task.allowQualityFallback ?? true,
+          quality: DEFAULT_DOWNLOAD_QUALITY,
+          allowQualityFallback: true,
         })
         task.url = resolved.url
         if (resolved.type && resolved.type !== task.quality) {
@@ -279,7 +315,7 @@ class DownloadTaskManager {
       const ext = await detectFileExt(tempPath, downloadResult.headerExt)
       const finalFilename = uniqueFilename(baseName, ext)
       const finalPath = path.join(downloadsDir, finalFilename)
-      fs.renameSync(tempPath, finalPath)
+      safeRenameSync(tempPath, finalPath)
       task.filename = finalFilename
       task.tempFilename = ''
 
@@ -337,9 +373,13 @@ class DownloadTaskManager {
       let fileStream: fs.WriteStream | null = null
       let lastTime = Date.now()
       let lastBytes = 0
+      const speedLimit = Math.max(0, Number(appConfig.download.throttleBytesPerSecond || 0))
+      const startTime = Date.now()
+      let throttleTimer: NodeJS.Timeout | null = null
 
       const cleanup = () => {
         controller.signal.removeEventListener('abort', abort)
+        if (throttleTimer) clearTimeout(throttleTimer)
       }
 
       const settle = (fn: () => void) => {
@@ -382,6 +422,7 @@ class DownloadTaskManager {
             const nextUrl = response.headers.location.startsWith('http')
               ? response.headers.location
               : new URL(response.headers.location, targetUrl).href
+            response.resume()
             requestUrl(nextUrl, redirectCount + 1)
             return
           }
@@ -410,9 +451,27 @@ class DownloadTaskManager {
               lastBytes = task.received
               this.touch(task)
             }
+            if (speedLimit > 0 && !throttleTimer) {
+              const expectedElapsed = (task.received / speedLimit) * 1000
+              const actualElapsed = now - startTime
+              const delay = Math.min(1000, Math.max(0, expectedElapsed - actualElapsed))
+              if (delay > 10) {
+                response.pause()
+                throttleTimer = setTimeout(() => {
+                  throttleTimer = null
+                  response.resume()
+                }, delay)
+              }
+            }
           })
 
           response.pipe(fileStream)
+          response.on('aborted', () => {
+            settle(() => reject(new Error('Download aborted by remote server')))
+          })
+          response.on('error', error => {
+            settle(() => reject(error))
+          })
           fileStream.on('finish', () => {
             fileStream?.close(() => {
               task.progress = 100
@@ -429,6 +488,9 @@ class DownloadTaskManager {
 
         request.on('error', error => {
           settle(() => reject(error))
+        })
+        request.setTimeout(DOWNLOAD_IDLE_TIMEOUT_MS, () => {
+          request?.destroy(new Error(`Download timeout (${Math.round(DOWNLOAD_IDLE_TIMEOUT_MS / 1000)}s idle)`))
         })
         request.end()
       }

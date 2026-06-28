@@ -1,9 +1,9 @@
 // @ts-ignore copied lxserver SDK is JavaScript.
 import musicSdkRaw from '../modules/utils/musicSdk/index.js'
+import { QUALITY_FALLBACK_ORDER } from '../common/constants'
 import { callUserApiGetMusicUrl, isSourceSupported } from './userApi'
 
 const musicSdk = musicSdkRaw as any
-const QUALITY_FALLBACK_ORDER = ['master', 'flac24bit', 'flac', 'wav', 'ape', '320k', '192k', '128k']
 const AUTO_QUALITY_VALUES = new Set(['best', 'highest', 'auto'])
 
 export const initMusicSdk = async () => {
@@ -83,9 +83,18 @@ export const normalizeSongInfo = (songInfo: any) => {
   return songInfo
 }
 
-const normalizeListResult = (result: any) => {
+const normalizeSongSource = (songInfo: any, source: string) => {
+  const normalized = normalizeSongInfo(songInfo)
+  if (!source) return normalized
+  normalized.source = source
+  if (normalized.meta && typeof normalized.meta === 'object') normalized.meta.source = source
+  return normalized
+}
+
+const normalizeListResult = (result: any, source = '') => {
+  if (source) result.source = source
   if (result?.list && Array.isArray(result.list)) {
-    result.list = result.list.map(normalizeSongInfo)
+    result.list = result.list.map((songInfo: any) => normalizeSongSource(songInfo, source))
   }
   return result
 }
@@ -95,8 +104,8 @@ export const getSongListTags = async (source: string) => {
   if (!songList.getTags) throw new Error(`Source ${source} does not support songList tags`)
   const result = await songList.getTags()
   return {
-    source,
     ...result,
+    source,
     sortList: songList.sortList || result?.sortList || [],
   }
 }
@@ -104,45 +113,48 @@ export const getSongListTags = async (source: string) => {
 export const getSongLists = async (source: string, sortId = 'hot', tagId = '', page = 1) => {
   const songList = getSourceFeature(source, 'songList')
   if (!songList.getList) throw new Error(`Source ${source} does not support songList list`)
-  return { source, ...(await songList.getList(sortId, tagId, page)) }
+  return { ...(await songList.getList(sortId, tagId, page)), source }
 }
 
 export const getSongListDetail = async (source: string, id: string, page = 1) => {
   const songList = getSourceFeature(source, 'songList')
   if (!songList.getListDetail) throw new Error(`Source ${source} does not support songList detail`)
-  return normalizeListResult({ source, ...(await songList.getListDetail(id, page)) })
+  return normalizeListResult({ ...(await songList.getListDetail(id, page)), source }, source)
 }
 
 export const searchSongLists = async (source: string, text: string, page = 1) => {
   const songList = getSourceFeature(source, 'songList')
   if (!songList.search) throw new Error(`Source ${source} does not support songList search`)
-  return { source, ...(await songList.search(text, page)) }
+  return { ...(await songList.search(text, page)), source }
 }
 
 export const getUserPlaylist = async (source: string, uid: string, page = 1) => {
   const userPlaylist = getSourceFeature(source, 'userPlaylist')
   if (!userPlaylist.getList) throw new Error(`Source ${source} does not support userPlaylist`)
-  return { source, ...(await userPlaylist.getList(uid, page)) }
+  return { ...(await userPlaylist.getList(uid, page)), source }
 }
 
 export const getLeaderboardBoards = async (source: string) => {
   const leaderboard = getSourceFeature(source, 'leaderboard')
   if (!leaderboard.getBoards) throw new Error(`Source ${source} does not support leaderboard boards`)
-  return { source, ...(await leaderboard.getBoards()) }
+  return { ...(await leaderboard.getBoards()), source }
 }
 
 export const getLeaderboardList = async (source: string, bangid: string, page = 1) => {
   const leaderboard = getSourceFeature(source, 'leaderboard')
   if (!leaderboard.getList) throw new Error(`Source ${source} does not support leaderboard list`)
-  return normalizeListResult({ source, ...(await leaderboard.getList(bangid, page)) })
+  return normalizeListResult({ ...(await leaderboard.getList(bangid, page)), source }, source)
 }
 
 const resolveRedirects = async (url: string): Promise<string> => {
   if (!url.startsWith('http')) return url
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, 10000)
   try {
     const response = await fetch(url, {
       method: 'HEAD',
       redirect: 'follow',
+      signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
@@ -150,6 +162,8 @@ const resolveRedirects = async (url: string): Promise<string> => {
     return response.url || url
   } catch {
     return url
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -177,32 +191,43 @@ const collectAvailableQualities = (songInfo: any) => {
 
 export const getQualityFallbackCandidates = (
   songInfo: any,
-  requestedQuality = '128k',
+  requestedQuality = 'best',
   allowQualityFallback = true,
 ) => {
-  const requested = String(requestedQuality || '128k').trim()
+  const requested = String(requestedQuality || 'best').trim()
   const isAuto = AUTO_QUALITY_VALUES.has(requested.toLowerCase())
   const available = collectAvailableQualities(songInfo)
-  const orderedAvailable = QUALITY_FALLBACK_ORDER.filter(quality => available.has(quality))
+  const qualityOrder = QUALITY_FALLBACK_ORDER
+  const orderedAvailable = qualityOrder.filter(quality => available.has(quality))
 
   if (isAuto) {
-    const startQuality = orderedAvailable[0] || QUALITY_FALLBACK_ORDER[0]
-    const startIndex = Math.max(0, QUALITY_FALLBACK_ORDER.indexOf(startQuality))
-    const candidates = QUALITY_FALLBACK_ORDER.slice(startIndex)
+    const candidates = orderedAvailable.length ? orderedAvailable : qualityOrder
     return allowQualityFallback ? candidates : [candidates[0] || '128k']
   }
 
   if (!allowQualityFallback) return [requested]
 
-  const startIndex = QUALITY_FALLBACK_ORDER.indexOf(requested)
+  if (orderedAvailable.length) {
+    const requestedRank = qualityOrder.indexOf(requested)
+    if (requestedRank === -1) {
+      return [requested, ...orderedAvailable.filter(quality => quality !== requested)]
+    }
+    const lowerOrEqualAvailable = orderedAvailable.filter(quality => {
+      const rank = qualityOrder.indexOf(quality)
+      return rank >= requestedRank
+    })
+    return lowerOrEqualAvailable.length ? lowerOrEqualAvailable : orderedAvailable
+  }
+
+  const startIndex = qualityOrder.indexOf(requested)
   if (startIndex === -1) {
     return [
       requested,
-      ...QUALITY_FALLBACK_ORDER.filter(quality => quality !== requested),
+      ...qualityOrder.filter(quality => quality !== requested),
     ]
   }
 
-  const lowerOrEqual = QUALITY_FALLBACK_ORDER.slice(startIndex)
+  const lowerOrEqual = qualityOrder.slice(startIndex)
   return lowerOrEqual
 }
 
@@ -225,7 +250,7 @@ export const resolveMusicUrl = async (input: {
   enableAutoSwitchApiSource?: boolean
 }) => {
   if (!input.songInfo?.source) throw new Error('Invalid songInfo')
-  const requestedQuality = String(input.quality || '128k').trim()
+  const requestedQuality = String(input.quality || 'best').trim()
   const candidates = getQualityFallbackCandidates(
     input.songInfo,
     requestedQuality,
