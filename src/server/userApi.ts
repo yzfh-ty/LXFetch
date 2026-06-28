@@ -7,6 +7,8 @@ import vm from 'node:vm'
 import { VM } from 'vm2'
 import needle from 'needle'
 import { appConfig, scriptsDir, sourcesDir } from '../config'
+import { readJsonFile, writeJsonFileAtomic } from './jsonStore'
+import { normalizeQuality } from '../common/constants'
 import {
   getNeteaseCookieSourceName,
   isNeteaseCookieResolverEnabled,
@@ -317,8 +319,21 @@ const parseSizeToBytes = (value: any): number => {
 }
 
 const getExpectedQualitySize = (songInfo: any, quality: string): number => {
-  const direct = songInfo?._types?.[quality]?.size || songInfo?.types?.find?.((item: any) => item.type === quality)?.size
-  const meta = songInfo?.meta?._qualitys?.[quality]?.size || songInfo?.meta?.qualitys?.find?.((item: any) => item.type === quality)?.size
+  const normalizedQuality = normalizeQuality(quality)
+  const getMapSize = (map: any) => {
+    if (!map || typeof map !== 'object') return ''
+    if (map[normalizedQuality]?.size) return map[normalizedQuality].size
+    for (const key of Object.keys(map)) {
+      if (normalizeQuality(key) === normalizedQuality) return map[key]?.size
+    }
+    return ''
+  }
+  const getListSize = (list: any) => {
+    if (!Array.isArray(list)) return ''
+    return list.find((item: any) => normalizeQuality(item?.type || item) === normalizedQuality)?.size
+  }
+  const direct = getMapSize(songInfo?._types) || getListSize(songInfo?.types)
+  const meta = getMapSize(songInfo?.meta?._qualitys) || getListSize(songInfo?.meta?.qualitys)
   return parseSizeToBytes(direct || meta)
 }
 
@@ -451,20 +466,21 @@ const probeUrlQuality = async (url: string, songInfo: any, quality: string): Pro
 }
 
 const getProbeQualityMismatch = (probe: QualityProbe, songInfo: any, quality: string) => {
-  const expectedSize = getExpectedQualitySize(songInfo, quality)
+  const normalizedQuality = normalizeQuality(quality)
+  const expectedSize = getExpectedQualitySize(songInfo, normalizedQuality)
   const ext = (probe.ext || '').toLowerCase()
 
-  if (LOSSLESS_QUALITIES.has(quality) && LOSSY_EXTS.has(ext)) {
-    return `请求 ${quality}，但返回的是 ${ext}`
+  if (LOSSLESS_QUALITIES.has(normalizedQuality) && LOSSY_EXTS.has(ext)) {
+    return `请求 ${normalizedQuality}，但返回的是 ${ext}`
   }
 
   if (expectedSize && probe.contentLength) {
     const ratio = probe.contentLength / expectedSize
-    if (LOSSLESS_QUALITIES.has(quality) && ratio < 0.7) {
-      return `请求 ${quality} 预期约 ${formatBytes(expectedSize)}，实际链接约 ${formatBytes(probe.contentLength)}`
+    if (LOSSLESS_QUALITIES.has(normalizedQuality) && ratio < 0.7) {
+      return `请求 ${normalizedQuality} 预期约 ${formatBytes(expectedSize)}，实际链接约 ${formatBytes(probe.contentLength)}`
     }
-    if (!LOSSLESS_QUALITIES.has(quality) && ratio < 0.45) {
-      return `请求 ${quality} 预期约 ${formatBytes(expectedSize)}，实际链接约 ${formatBytes(probe.contentLength)}`
+    if (!LOSSLESS_QUALITIES.has(normalizedQuality) && ratio < 0.45) {
+      return `请求 ${normalizedQuality} 预期约 ${formatBytes(expectedSize)}，实际链接约 ${formatBytes(probe.contentLength)}`
     }
   }
 
@@ -722,7 +738,8 @@ export const loadUserApi = async (apiInfo: UserApiInfo): Promise<any> => {
 const readSourceMeta = (): any[] => {
   const metaPath = path.join(sourcesDir, 'sources.json')
   if (!fs.existsSync(metaPath)) return []
-  return JSON.parse(fs.readFileSync(metaPath, 'utf8'))
+  const sources = readJsonFile<any[]>(metaPath, [])
+  return Array.isArray(sources) ? sources : []
 }
 
 export const getApiStatus = (id: string) => apiStatus.get(id)
@@ -737,7 +754,10 @@ export const initUserApis = async () => {
   const orderPath = path.join(sourcesDir, 'order.json')
   let order: string[] = []
   if (fs.existsSync(orderPath)) {
-    try { order = JSON.parse(fs.readFileSync(orderPath, 'utf8')) } catch {}
+    try {
+      const parsed = readJsonFile<string[]>(orderPath, [])
+      order = Array.isArray(parsed) ? parsed : []
+    } catch {}
   }
   if (order.length) {
     const positions = new Map(order.map((id, index) => [id, index]))
@@ -792,7 +812,7 @@ export const initUserApis = async () => {
   if (needsSave) {
     const updated = new Map(sources.map(source => [source.id, source]))
     const merged = storedSources.map(source => updated.get(source.id) || source)
-    fs.writeFileSync(path.join(sourcesDir, 'sources.json'), JSON.stringify(merged, null, 2))
+    writeJsonFileAtomic(path.join(sourcesDir, 'sources.json'), merged)
   }
 
   return Array.from(loadedApis.values()).length
@@ -837,7 +857,8 @@ const getOrderedCandidates = (source: string) => {
   const orderPath = path.join(sourcesDir, 'order.json')
   if (candidates.length > 1 && fs.existsSync(orderPath)) {
     try {
-      const order: string[] = JSON.parse(fs.readFileSync(orderPath, 'utf8'))
+      const parsed = readJsonFile<string[]>(orderPath, [])
+      const order = Array.isArray(parsed) ? parsed : []
       const positions = new Map(order.map((id, index) => [id, index]))
       candidates.sort((a, b) => (positions.get(a.info.id) ?? 999999) - (positions.get(b.info.id) ?? 999999))
     } catch {}
@@ -849,7 +870,7 @@ const getApiSourceQualities = (api: LoadedApi, source: string) => {
   const sourceInfo = api.info.sources?.[source]
   const values = new Set<string>()
   const add = (quality: any) => {
-    if (typeof quality === 'string' && quality.trim()) values.add(quality.trim())
+    if (typeof quality === 'string' && quality.trim()) values.add(normalizeQuality(quality))
   }
   const addList = (list: any) => {
     if (Array.isArray(list)) {
@@ -904,6 +925,7 @@ export const callUserApiGetMusicUrl = async (
   onProgress?: (attempt: any) => Promise<void> | void,
   enableAutoSwitchApiSource = true,
 ): Promise<{ url: string, type: string, sourceName?: string, attempts?: any[] }> => {
+  quality = normalizeQuality(quality)
   const normalizedSongInfo = normalizeSongInfo(songInfo)
   let candidates = getOrderedCandidates(source)
   if (enableAutoSwitchApiSource === false && candidates.length > 1) candidates = [candidates[0]]

@@ -1,9 +1,10 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import { appConfig, subscriptionsFile } from '../config'
+import { isHigherQuality } from '../common/constants'
 import { downloadTaskManager } from './downloadTaskManager'
-import { readDownloadIndex } from './downloadIndex'
-import { getLeaderboardList, getSongListDetail } from './musicResolver'
+import { getDownloadedItemBySongInfo } from './downloadIndex'
+import { getBestReportedQuality, getLeaderboardList, getSongListDetail } from './musicResolver'
+import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from './jsonStore'
+import { getSongKey } from './songIdentity'
 
 type SubscriptionType = 'songList' | 'leaderboard'
 
@@ -32,6 +33,8 @@ export interface Subscription {
   lastError: string
   lastFoundCount: number
   lastCreatedCount: number
+  lastSkippedCount: number
+  lastInvalidCount: number
   createdAt: number
   updatedAt: number
 }
@@ -56,8 +59,7 @@ const sleep = async (ms: number) => {
 }
 
 const ensureSubscriptionsFile = () => {
-  if (!fs.existsSync(path.dirname(subscriptionsFile))) fs.mkdirSync(path.dirname(subscriptionsFile), { recursive: true })
-  if (!fs.existsSync(subscriptionsFile)) fs.writeFileSync(subscriptionsFile, '[]')
+  ensureJsonFile(subscriptionsFile, [])
 }
 
 const createId = () => `sub_${Date.now()}_${Math.random().toString(16).slice(2)}`
@@ -82,25 +84,6 @@ const pinSongSource = (songInfo: any, source: string) => {
   return normalized
 }
 
-export const getSongKey = (songInfo: any) => {
-  const meta = songInfo?.meta || {}
-  const source = songInfo?.source || meta.source || ''
-  const rawId = songInfo?.songmid
-    || songInfo?.songId
-    || songInfo?.id
-    || songInfo?.hash
-    || songInfo?.strMediaMid
-    || songInfo?.copyrightId
-    || meta.songId
-    || meta.hash
-    || meta.strMediaMid
-    || meta.copyrightId
-  if (rawId) return `${source}:${String(rawId)}`
-  const name = songInfo?.name || songInfo?.songName || songInfo?.title || meta.name || ''
-  const singer = songInfo?.singer || songInfo?.artist || songInfo?.author || meta.singer || ''
-  return `${source}:name:${name}:${singer}`.toLowerCase()
-}
-
 class SubscriptionManager {
   private subscriptions: Subscription[] = []
   private runningIds = new Set<string>()
@@ -112,35 +95,33 @@ class SubscriptionManager {
 
   private load() {
     ensureSubscriptionsFile()
-    try {
-      const parsed = JSON.parse(fs.readFileSync(subscriptionsFile, 'utf8'))
-      if (!Array.isArray(parsed)) return []
-      return parsed.map((item: any) => ({
-        ...item,
-        enabled: item.enabled !== false,
-        intervalMinutes: clampInterval(item.intervalMinutes),
-        quality: 'best',
-        allowQualityFallback: true,
-        options: {
-          embedCover: item.options?.embedCover ?? appConfig.download.embedCover,
-          embedLyric: item.options?.embedLyric ?? appConfig.download.embedLyric,
-          writeTags: item.options?.writeTags ?? appConfig.download.writeTags,
-          verifyMetadata: item.options?.verifyMetadata ?? appConfig.download.verifyMetadata,
-        },
-        downloadedKeys: Array.isArray(item.downloadedKeys) ? item.downloadedKeys : [],
-        lastRunStatus: item.lastRunStatus === 'running' ? 'idle' : (item.lastRunStatus || 'idle'),
-        lastError: item.lastError || '',
-        lastFoundCount: Number(item.lastFoundCount || 0),
-        lastCreatedCount: Number(item.lastCreatedCount || 0),
-      }))
-    } catch {
-      return []
-    }
+    const parsed = readJsonFile<any[]>(subscriptionsFile, [])
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((item: any) => ({
+      ...item,
+      enabled: item.enabled !== false,
+      intervalMinutes: clampInterval(item.intervalMinutes),
+      quality: 'best',
+      allowQualityFallback: true,
+      options: {
+        embedCover: item.options?.embedCover ?? appConfig.download.embedCover,
+        embedLyric: item.options?.embedLyric ?? appConfig.download.embedLyric,
+        writeTags: item.options?.writeTags ?? appConfig.download.writeTags,
+        verifyMetadata: item.options?.verifyMetadata ?? appConfig.download.verifyMetadata,
+      },
+      downloadedKeys: Array.isArray(item.downloadedKeys) ? item.downloadedKeys : [],
+      lastRunStatus: item.lastRunStatus === 'running' ? 'idle' : (item.lastRunStatus || 'idle'),
+      lastError: item.lastError || '',
+      lastFoundCount: Number(item.lastFoundCount || 0),
+      lastCreatedCount: Number(item.lastCreatedCount || 0),
+      lastSkippedCount: Number(item.lastSkippedCount || 0),
+      lastInvalidCount: Number(item.lastInvalidCount || 0),
+    }))
   }
 
   private save() {
     ensureSubscriptionsFile()
-    fs.writeFileSync(subscriptionsFile, JSON.stringify(this.subscriptions, null, 2))
+    writeJsonFileAtomic(subscriptionsFile, this.subscriptions)
   }
 
   private touch(subscription: Subscription) {
@@ -149,7 +130,10 @@ class SubscriptionManager {
   }
 
   list() {
-    return this.subscriptions
+    return this.subscriptions.map(subscription => ({
+      ...subscription,
+      running: this.runningIds.has(subscription.id),
+    }))
   }
 
   get(id: string) {
@@ -205,6 +189,8 @@ class SubscriptionManager {
       lastError: '',
       lastFoundCount: 0,
       lastCreatedCount: 0,
+      lastSkippedCount: 0,
+      lastInvalidCount: 0,
       createdAt: now,
       updatedAt: now,
     }
@@ -227,6 +213,20 @@ class SubscriptionManager {
     this.subscriptions = this.subscriptions.filter(item => item.id !== id)
     this.save()
     return this.subscriptions.length !== before
+  }
+
+  resetRecord(id: string) {
+    const subscription = this.get(id)
+    if (!subscription) throw new Error('Subscription not found')
+    subscription.downloadedKeys = []
+    subscription.lastRunStatus = 'idle'
+    subscription.lastError = ''
+    subscription.lastFoundCount = 0
+    subscription.lastCreatedCount = 0
+    subscription.lastSkippedCount = 0
+    subscription.lastInvalidCount = 0
+    this.touch(subscription)
+    return subscription
   }
 
   startScheduler() {
@@ -259,13 +259,19 @@ class SubscriptionManager {
     }
   }
 
-  private getExistingDownloadedKeys() {
-    const keys = new Set<string>()
-    for (const item of readDownloadIndex()) {
-      if (item.songInfo) keys.add(getSongKey(item.songInfo))
-      keys.add(`${item.source}:${item.songId}`)
-    }
-    return keys
+  private shouldSkipSong(song: any, subscription: Subscription, activeKeys: Set<string>) {
+    const key = getSongKey(song)
+    if (!key || activeKeys.has(key)) return true
+
+    const existing = getDownloadedItemBySongInfo(song)
+    const hasKnownKey = subscription.downloadedKeys.includes(key)
+    if (!hasKnownKey && !existing) return false
+    if (!appConfig.download.upgradeExisting) return true
+    if (!existing) return true
+
+    const targetQuality = getBestReportedQuality(song)
+    const existingQuality = existing.actualQuality || existing.quality
+    return !targetQuality || !isHigherQuality(targetQuality, existingQuality)
   }
 
   private async fetchSongs(subscription: Subscription) {
@@ -281,8 +287,10 @@ class SubscriptionManager {
         if (songs.length >= MAX_FETCH_SONGS) break
         const pinnedSong = pinSongSource(song, subscription.source)
         const key = getSongKey(pinnedSong)
-        if (seenKeys.has(key)) continue
-        seenKeys.add(key)
+        if (key) {
+          if (seenKeys.has(key)) continue
+          seenKeys.add(key)
+        }
         songs.push(pinnedSong)
         addedFromPage += 1
       }
@@ -308,24 +316,32 @@ class SubscriptionManager {
     this.touch(subscription)
 
     try {
-      const existingKeys = this.getExistingDownloadedKeys()
-      const knownKeys = new Set([...subscription.downloadedKeys, ...existingKeys])
+      const activeKeys = downloadTaskManager.getActiveSongKeys()
       const songs = await this.fetchSongs(subscription)
       const configuredMaxTasks = Number(appConfig.subscription.maxTasksPerRun || 0)
       const maxTasksPerRun = configuredMaxTasks > 0 ? configuredMaxTasks : Number.POSITIVE_INFINITY
       const taskCreateDelayMs = Math.max(0, Number(appConfig.subscription.taskCreateDelayMs || 0))
       let created = 0
+      let skipped = 0
+      let invalid = 0
 
       for (const song of songs) {
         if (created >= maxTasksPerRun) break
         const key = getSongKey(song)
-        if (!key || knownKeys.has(key)) continue
+        if (!key) {
+          invalid += 1
+          continue
+        }
+        if (this.shouldSkipSong(song, subscription, activeKeys)) {
+          skipped += 1
+          continue
+        }
         downloadTaskManager.createTask({
           songInfo: song,
           source: subscription.source,
           options: subscription.options,
         })
-        knownKeys.add(key)
+        activeKeys.add(key)
         subscription.downloadedKeys.push(key)
         created += 1
         if (taskCreateDelayMs > 0) await sleep(taskCreateDelayMs)
@@ -335,6 +351,8 @@ class SubscriptionManager {
       subscription.lastRunStatus = 'success'
       subscription.lastFoundCount = songs.length
       subscription.lastCreatedCount = created
+      subscription.lastSkippedCount = skipped
+      subscription.lastInvalidCount = invalid
       subscription.lastUpdatedAt = Date.now()
       subscription.lastError = ''
       this.touch(subscription)

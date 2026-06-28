@@ -1,6 +1,6 @@
 // @ts-ignore copied lxserver SDK is JavaScript.
 import musicSdkRaw from '../modules/utils/musicSdk/index.js'
-import { QUALITY_FALLBACK_ORDER } from '../common/constants'
+import { QUALITY_FALLBACK_ORDER, normalizeQuality } from '../common/constants'
 import { callUserApiGetMusicUrl, isSourceSupported } from './userApi'
 
 const musicSdk = musicSdkRaw as any
@@ -170,7 +170,7 @@ const resolveRedirects = async (url: string): Promise<string> => {
 const collectAvailableQualities = (songInfo: any) => {
   const values = new Set<string>()
   const add = (quality: any) => {
-    if (typeof quality === 'string' && quality.trim()) values.add(quality.trim())
+    if (typeof quality === 'string' && quality.trim()) values.add(normalizeQuality(quality))
   }
   const addFromTypes = (types: any) => {
     if (Array.isArray(types)) {
@@ -189,6 +189,11 @@ const collectAvailableQualities = (songInfo: any) => {
   return values
 }
 
+export const getBestReportedQuality = (songInfo: any) => {
+  const available = collectAvailableQualities(songInfo)
+  return QUALITY_FALLBACK_ORDER.find(quality => available.has(quality)) || ''
+}
+
 export const getQualityFallbackCandidates = (
   songInfo: any,
   requestedQuality = 'best',
@@ -196,6 +201,7 @@ export const getQualityFallbackCandidates = (
 ) => {
   const requested = String(requestedQuality || 'best').trim()
   const isAuto = AUTO_QUALITY_VALUES.has(requested.toLowerCase())
+  const normalizedRequested = isAuto ? requested : normalizeQuality(requested)
   const available = collectAvailableQualities(songInfo)
   const qualityOrder = QUALITY_FALLBACK_ORDER
   const orderedAvailable = qualityOrder.filter(quality => available.has(quality))
@@ -205,12 +211,12 @@ export const getQualityFallbackCandidates = (
     return allowQualityFallback ? candidates : [candidates[0] || '128k']
   }
 
-  if (!allowQualityFallback) return [requested]
+  if (!allowQualityFallback) return [normalizedRequested]
 
   if (orderedAvailable.length) {
-    const requestedRank = qualityOrder.indexOf(requested)
+    const requestedRank = qualityOrder.indexOf(normalizedRequested)
     if (requestedRank === -1) {
-      return [requested, ...orderedAvailable.filter(quality => quality !== requested)]
+      return [normalizedRequested, ...orderedAvailable.filter(quality => quality !== normalizedRequested)]
     }
     const lowerOrEqualAvailable = orderedAvailable.filter(quality => {
       const rank = qualityOrder.indexOf(quality)
@@ -219,11 +225,11 @@ export const getQualityFallbackCandidates = (
     return lowerOrEqualAvailable.length ? lowerOrEqualAvailable : orderedAvailable
   }
 
-  const startIndex = qualityOrder.indexOf(requested)
+  const startIndex = qualityOrder.indexOf(normalizedRequested)
   if (startIndex === -1) {
     return [
-      requested,
-      ...qualityOrder.filter(quality => quality !== requested),
+      normalizedRequested,
+      ...qualityOrder.filter(quality => quality !== normalizedRequested),
     ]
   }
 
@@ -250,7 +256,10 @@ export const resolveMusicUrl = async (input: {
   enableAutoSwitchApiSource?: boolean
 }) => {
   if (!input.songInfo?.source) throw new Error('Invalid songInfo')
-  const requestedQuality = String(input.quality || 'best').trim()
+  const rawRequestedQuality = String(input.quality || 'best').trim()
+  const requestedQuality = AUTO_QUALITY_VALUES.has(rawRequestedQuality.toLowerCase())
+    ? rawRequestedQuality
+    : normalizeQuality(rawRequestedQuality)
   const candidates = getQualityFallbackCandidates(
     input.songInfo,
     requestedQuality,

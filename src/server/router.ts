@@ -6,7 +6,14 @@ import { QUALITY_FALLBACK_ORDER } from '../common/constants'
 import { isAdminRequest, requireAdmin } from './auth'
 import { deleteDownloadedFile, getDownloadIndexItem, readDownloadIndex, upsertDownloadIndex } from './downloadIndex'
 import { downloadTaskManager } from './downloadTaskManager'
-import { extractSongMetadata, collectMetadata, verifyFileMetadata, writeTags } from './metadataResolver'
+import {
+  cleanupMetadataCache,
+  collectMetadata,
+  extractSongMetadata,
+  getMetadataCacheStats,
+  verifyFileMetadata,
+  writeTags,
+} from './metadataResolver'
 import {
   getLeaderboardBoards,
   getLeaderboardList,
@@ -51,6 +58,40 @@ const rebuildSongInfoFromIndex = (item: any) => {
   }
 }
 
+const clampInteger = (value: any, fallback: number, min: number, max: number) => {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(max, Math.floor(parsed)))
+}
+
+const getQueryInteger = (
+  urlObj: URL,
+  name: string,
+  fallback: number,
+  min: number,
+  max: number,
+) => clampInteger(urlObj.searchParams.get(name), fallback, min, max)
+
+const getBodyString = (body: any, key: string) => String(body?.[key] || '').trim()
+
+const isPlainObject = (value: any) => {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+const getErrorStatus = (error: any) => {
+  const message = String(error?.message || error || '')
+  if (message === 'File not found' || message.includes('not found') || message.includes('不存在')) return 404
+  if (
+    message.includes('Unsupported source')
+    || message.includes('does not support')
+    || message.includes('Missing')
+    || message.includes('Invalid')
+    || message.includes('缺少')
+    || message.includes('无效')
+  ) return 400
+  return 500
+}
+
 export const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   try {
     const urlObj = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`)
@@ -73,10 +114,17 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
         download: {
           maxConcurrent: appConfig.download.maxConcurrent,
           throttleBytesPerSecond: appConfig.download.throttleBytesPerSecond,
+          maxRetries: appConfig.download.maxRetries,
+          retryDelayMs: appConfig.download.retryDelayMs,
           embedCover: appConfig.download.embedCover,
           embedLyric: appConfig.download.embedLyric,
           writeTags: appConfig.download.writeTags,
           verifyMetadata: appConfig.download.verifyMetadata,
+          cacheMetadata: appConfig.download.cacheMetadata,
+          metadataCacheMaxAgeDays: appConfig.download.metadataCacheMaxAgeDays,
+          metadataCacheMaxBytes: appConfig.download.metadataCacheMaxBytes,
+          skipExisting: appConfig.download.skipExisting,
+          upgradeExisting: appConfig.download.upgradeExisting,
         },
         subscription: {
           maxTasksPerRun: appConfig.subscription.maxTasksPerRun,
@@ -97,6 +145,24 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const password = req.headers['x-admin-password'] || body.password
       const ok = !appConfig.auth.adminPassword || password === appConfig.auth.adminPassword
       sendJson(res, ok ? 200 : 401, { success: ok })
+      return
+    }
+
+    if (pathname === '/api/cache/metadata' && req.method === 'GET') {
+      sendJson(res, 200, { success: true, ...getMetadataCacheStats() })
+      return
+    }
+
+    if (pathname === '/api/cache/metadata/cleanup') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const body = await readJson(req).catch(() => ({}))
+      const result = cleanupMetadataCache({
+        maxAgeDays: body.maxAgeDays,
+        maxBytes: body.maxBytes,
+        force: body.force,
+      })
+      sendJson(res, 200, { success: true, ...result })
       return
     }
 
@@ -143,8 +209,8 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/music/search' && req.method === 'GET') {
       const source = urlObj.searchParams.get('source') || ''
       const keyword = urlObj.searchParams.get('keyword') || ''
-      const page = Number(urlObj.searchParams.get('page') || 1)
-      const limit = Number(urlObj.searchParams.get('limit') || 30)
+      const page = getQueryInteger(urlObj, 'page', 1, 1, 10000)
+      const limit = getQueryInteger(urlObj, 'limit', 30, 1, 100)
       if (!source || !keyword) return sendError(res, 400, 'Missing source or keyword')
       const result = await searchMusic(source, keyword, page, limit)
       sendJson(res, 200, { success: true, ...result })
@@ -163,7 +229,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       const source = urlObj.searchParams.get('source') || ''
       const sortId = urlObj.searchParams.get('sortId') || 'hot'
       const tagId = urlObj.searchParams.get('tagId') || ''
-      const page = Number(urlObj.searchParams.get('page') || 1)
+      const page = getQueryInteger(urlObj, 'page', 1, 1, 10000)
       if (!source) return sendError(res, 400, 'Missing source')
       const result = await getSongLists(source, sortId, tagId, page)
       sendJson(res, 200, { success: true, ...result })
@@ -173,7 +239,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/music/songList/detail' && req.method === 'GET') {
       const source = urlObj.searchParams.get('source') || ''
       const id = urlObj.searchParams.get('id') || ''
-      const page = Number(urlObj.searchParams.get('page') || 1)
+      const page = getQueryInteger(urlObj, 'page', 1, 1, 10000)
       if (!source || !id) return sendError(res, 400, 'Missing source or id')
       const result = await getSongListDetail(source, id, page)
       sendJson(res, 200, { success: true, ...result })
@@ -183,7 +249,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/music/songList/search' && req.method === 'GET') {
       const source = urlObj.searchParams.get('source') || ''
       const text = urlObj.searchParams.get('text') || ''
-      const page = Number(urlObj.searchParams.get('page') || 1)
+      const page = getQueryInteger(urlObj, 'page', 1, 1, 10000)
       if (!source || !text) return sendError(res, 400, 'Missing source or text')
       const result = await searchSongLists(source, text, page)
       sendJson(res, 200, { success: true, ...result })
@@ -193,7 +259,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/music/songList/userPlaylist' && req.method === 'GET') {
       const source = urlObj.searchParams.get('source') || ''
       const uid = urlObj.searchParams.get('uid') || ''
-      const page = Number(urlObj.searchParams.get('page') || 1)
+      const page = getQueryInteger(urlObj, 'page', 1, 1, 10000)
       if (!source || !uid) return sendError(res, 400, 'Missing source or uid')
       const result = await getUserPlaylist(source, uid, page)
       sendJson(res, 200, { success: true, ...result })
@@ -211,7 +277,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/music/leaderboard/list' && req.method === 'GET') {
       const source = urlObj.searchParams.get('source') || ''
       const bangid = urlObj.searchParams.get('bangid') || ''
-      const page = Number(urlObj.searchParams.get('page') || 1)
+      const page = getQueryInteger(urlObj, 'page', 1, 1, 10000)
       if (!source || !bangid) return sendError(res, 400, 'Missing source or bangid')
       const result = await getLeaderboardList(source, bangid, page)
       sendJson(res, 200, { success: true, ...result })
@@ -221,6 +287,7 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/music/resolve') {
       if (req.method !== 'POST') return methodNotAllowed(res)
       const body = await readJson(req)
+      if (!isPlainObject(body.songInfo)) return sendError(res, 400, 'Invalid songInfo')
       const result = await resolveMusicUrl({
         songInfo: body.songInfo,
         quality: 'best',
@@ -239,12 +306,16 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       if (req.method === 'POST') {
         if (!requireAdmin(req, res)) return
         const body = await readJson(req)
+        const type = body.type === 'songList' || body.type === 'leaderboard' ? body.type : ''
+        const source = getBodyString(body, 'source')
+        const targetId = getBodyString(body, 'targetId')
+        if (!type || !source || !targetId) return sendError(res, 400, 'Missing or invalid subscription fields')
         const subscription = subscriptionManager.create({
-          type: body.type,
-          source: body.source,
-          targetId: body.targetId,
-          title: body.title,
-          intervalMinutes: body.intervalMinutes,
+          type,
+          source,
+          targetId,
+          title: getBodyString(body, 'title'),
+          intervalMinutes: clampInteger(body.intervalMinutes, 360, 15, 60 * 24 * 30),
           options: body.options,
         })
         sendJson(res, 200, { success: true, subscription })
@@ -272,6 +343,15 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return
     }
 
+    const subscriptionResetMatch = pathname.match(/^\/api\/subscriptions\/([^/]+)\/reset$/)
+    if (subscriptionResetMatch) {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const subscription = subscriptionManager.resetRecord(subscriptionResetMatch[1])
+      sendJson(res, 200, { success: true, subscription })
+      return
+    }
+
     const subscriptionMatch = pathname.match(/^\/api\/subscriptions\/([^/]+)$/)
     if (subscriptionMatch) {
       if (req.method !== 'DELETE') return methodNotAllowed(res)
@@ -284,22 +364,53 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
 
     if (pathname === '/api/download/tasks') {
       if (req.method === 'GET') {
-        sendJson(res, 200, { success: true, tasks: downloadTaskManager.listTasks() })
+        sendJson(res, 200, {
+          success: true,
+          tasks: downloadTaskManager.listTasks(),
+          stats: downloadTaskManager.getStats(),
+        })
         return
       }
       if (req.method === 'POST') {
         if (!requireAdmin(req, res)) return
         const body = await readJson(req)
+        if (!isPlainObject(body.songInfo)) return sendError(res, 400, 'Invalid songInfo')
         const task = downloadTaskManager.createTask({
           songInfo: body.songInfo,
-          source: body.source,
-          url: body.url,
+          source: getBodyString(body, 'source'),
+          url: typeof body.url === 'string' ? body.url.trim() : undefined,
           options: body.options,
         })
         sendJson(res, 200, { success: true, task })
         return
       }
       return methodNotAllowed(res)
+    }
+
+    if (pathname === '/api/download/tasks/clear') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const body = await readJson(req).catch(() => ({}))
+      const statuses = Array.isArray(body.statuses) ? body.statuses : []
+      const result = downloadTaskManager.clearTasks(statuses)
+      sendJson(res, 200, { success: true, ...result })
+      return
+    }
+
+    if (pathname === '/api/download/tasks/retry-failed') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const result = downloadTaskManager.retryFailedTasks()
+      sendJson(res, 200, { success: true, ...result })
+      return
+    }
+
+    if (pathname === '/api/download/tasks/stop-active') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const result = downloadTaskManager.stopActiveTasks()
+      sendJson(res, 200, { success: true, ...result })
+      return
     }
 
     const taskStopMatch = pathname.match(/^\/api\/download\/tasks\/([^/]+)\/stop$/)
@@ -397,6 +508,6 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       }
     }
   } catch (error: any) {
-    sendError(res, 500, error.message || String(error))
+    sendError(res, getErrorStatus(error), error.message || String(error))
   }
 }

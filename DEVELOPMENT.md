@@ -76,11 +76,18 @@ module.exports = {
     dir: './data/downloads',
     maxConcurrent: 1,
     throttleBytesPerSecond: 0,
+    maxRetries: 2,
+    retryDelayMs: 2000,
     filenamePattern: '{name} - {singer}',
     embedCover: true,
     embedLyric: true,
     writeTags: true,
     verifyMetadata: true,
+    cacheMetadata: true,
+    metadataCacheMaxAgeDays: 90,
+    metadataCacheMaxBytes: 200 * 1024 * 1024,
+    skipExisting: true,
+    upgradeExisting: true,
   },
   subscription: {
     maxTasksPerRun: 0,
@@ -97,7 +104,12 @@ module.exports = {
 - `netease.cookieFile` 会在 `netease.cookie` 为空时读取，默认是兄弟目录的 `../Netease_url/cookie.txt`。
 - `download.maxConcurrent` 是同时下载任务数，默认 `1`。
 - `download.throttleBytesPerSecond` 是单个下载任务的带宽限制，单位是 bytes/s，`0` 表示不限速。
+- `download.maxRetries` 和 `download.retryDelayMs` 只对下载阶段的网络中断、超时、临时远端错误、不完整文件生效；音源解析失败不会反复重试。
 - `download.filenamePattern` 默认是 `{name} - {singer}`。
+- `download.cacheMetadata` 会把歌词和封面缓存到 `data/cache/metadata`，减少批量下载时的重复请求。
+- `download.metadataCacheMaxAgeDays` 和 `download.metadataCacheMaxBytes` 用于缓存清理。
+- `download.skipExisting` 会在本地已经存在同一首歌时跳过重复下载。
+- `download.upgradeExisting` 会在本地文件音质低于当前歌曲数据明确报告的最高音质时继续下载升级版本，旧文件会保留。
 - `subscription.maxTasksPerRun` 是每次订阅更新最多创建的任务数，`0` 表示不限制本次入队数量。设置为正数时会分批入队，例如 200 首榜单设置为 `50` 会每次最多创建 50 个任务，后续定时更新或手动立即更新继续创建下一批。
 - `subscription.taskCreateDelayMs` 是订阅更新时每创建一个下载任务后的等待时间。
 
@@ -112,6 +124,7 @@ module.exports = {
 - 运行脚本并等待 `lx.send('inited', { sources })`。
 - 记录脚本支持的平台。
 - 启用、禁用、删除、排序。
+- Web 页面支持音源上移和下移，排序写入 `data/sources/order.json`。
 - 默认使用 `vm2`。
 - 可选 unsafe VM 兼容模式。
 
@@ -209,8 +222,11 @@ createTask
 - 完成后检测文件类型并安全 rename。
 - 文件名按 `filenamePattern` 生成并过滤非法字符。
 - 重名时自动添加序号。
-- 停止任务会中断请求并删除临时文件。
+- 等待、解析、下载阶段的任务可以停止，下载中的请求会被中断并删除临时文件。
 - 失败任务保留错误和 attempts。
+- 支持批量重试失败任务。
+- 支持批量停止可中断的活动任务。
+- 支持批量清理完成、失败、停止的任务历史。
 
 ### 4.5 元数据
 
@@ -261,10 +277,12 @@ createTask
 - 每次最多抓取 20 页。
 - 每次最多分析 500 首歌曲。
 - 已下载歌曲和已入队歌曲会跳过。
+- 无法生成有效歌曲 key 的条目会计入无效数量，不会创建下载任务。
 - `subscription.maxTasksPerRun = 0` 时，本次发现的新歌全部入队。
 - `subscription.maxTasksPerRun > 0` 时，本次只入队指定数量，剩余歌曲留到后续更新继续处理。
 - `subscription.taskCreateDelayMs` 控制入队间隔。
 - 真正下载仍受 `download.maxConcurrent` 控制。
+- 可以重置订阅记录，清空已记录歌曲 key 后重新扫描入队。
 
 存储位置：
 
@@ -286,6 +304,8 @@ data/
     scripts/
   downloads/
     downloads_index.json
+  cache/
+    metadata/
   subscriptions.json
   tasks.json
 ```
@@ -315,6 +335,9 @@ data/
   "filename": "",
   "tempFilename": "",
   "error": "",
+  "errorCategory": "",
+  "retryCount": 0,
+  "maxRetries": 2,
   "metadata": {
     "lyricFetched": false,
     "coverFetched": false,
@@ -354,6 +377,8 @@ data/
   "bitrate": 900,
   "sampleRate": 44100,
   "bitDepth": 16,
+  "actualQuality": "flac",
+  "actualQualityLabel": "FLAC 16bit / 44kHz / 900kbps",
   "hasCover": true,
   "hasLyric": true,
   "hasEmbedLyric": true,
@@ -392,6 +417,8 @@ data/
   "lastError": "",
   "lastFoundCount": 200,
   "lastCreatedCount": 12,
+  "lastSkippedCount": 188,
+  "lastInvalidCount": 0,
   "createdAt": 1782576000000,
   "updatedAt": 1782576000000
 }
@@ -469,6 +496,8 @@ data/
 - 拉取歌单/榜单歌曲。
 - 通过歌曲 key 去重。
 - 按入队间隔创建下载任务。
+- 统计发现、新建、跳过、无效歌曲数量。
+- 重置订阅去重记录。
 
 ## 8. API
 
@@ -523,6 +552,9 @@ data/
 
 - `GET /api/download/tasks`
 - `POST /api/download/tasks`
+- `POST /api/download/tasks/clear`
+- `POST /api/download/tasks/retry-failed`
+- `POST /api/download/tasks/stop-active`
 - `GET /api/download/tasks/:id`
 - `POST /api/download/tasks/:id/stop`
 - `POST /api/download/tasks/:id/retry`
@@ -555,6 +587,7 @@ data/
 - `POST /api/subscriptions`
 - `POST /api/subscriptions/:id/run`
 - `POST /api/subscriptions/:id/toggle`
+- `POST /api/subscriptions/:id/reset`
 - `DELETE /api/subscriptions/:id`
 
 `POST /api/subscriptions` 示例：
@@ -586,15 +619,19 @@ data/
 - 音源。
 - 任务。
 - 文件。
+- 配置。
 
 说明：
 
 - 下载选项放在音源页面，包括封面、歌词、标签、检查。
+- 音源页面支持上移和下移，控制多音源管理顺序。
 - 歌单详情和榜单详情提供“下载本页”和“订阅”。
 - 歌单详情本地分页，避免一次性展示过多歌曲。
 - 榜单列表分页展示。
 - 任务页展示状态、进度、速度、元数据状态、attempts。
+- 任务页展示队列统计，支持批量重试失败任务、停止可中断任务、清理完成任务、清理失败/停止任务。
 - 文件页支持下载、检查、重写标签、删除。
+- 配置页只读展示当前服务端下载、订阅、音源能力和平台能力配置。
 
 ## 10. 安全要求
 
@@ -633,6 +670,10 @@ data/
 - 验证高音质失败时自动降级。
 - 下载中停止。
 - 失败后重试。
+- 批量重试失败任务。
+- 批量停止可中断任务。
+- 清理完成任务。
+- 清理失败/停止任务。
 - 查看 attempts。
 
 歌单/榜单：
@@ -652,6 +693,7 @@ data/
 - 订阅榜单。
 - 立即更新订阅。
 - 暂停和启用订阅。
+- 重置订阅记录。
 - 删除订阅。
 - 确认重复歌曲不会重复入队。
 - 确认停止服务后订阅不会继续运行。

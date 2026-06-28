@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { appConfig, scriptsDir, sourcesDir } from '../config'
 import { readJson, sendError, sendJson } from './http'
 import { extractMetadata, getApiStatus, initUserApis, loadUserApi } from './userApi'
+import { ensureJsonFile, readJsonFile, writeJsonFileAtomic, writeTextFileAtomic } from './jsonStore'
 // @ts-ignore copied music SDK helper is JavaScript.
 import { httpFetch } from '../modules/utils/request.js'
 
@@ -15,17 +16,37 @@ const SOURCE_IMPORT_TIMEOUT_MS = 30000
 const ensureFiles = () => {
   if (!fs.existsSync(sourcesDir)) fs.mkdirSync(sourcesDir, { recursive: true })
   if (!fs.existsSync(scriptsDir)) fs.mkdirSync(scriptsDir, { recursive: true })
-  if (!fs.existsSync(sourcesMetaPath)) fs.writeFileSync(sourcesMetaPath, '[]')
+  ensureJsonFile(sourcesMetaPath, [])
 }
 
 const readSources = (): any[] => {
   ensureFiles()
-  try { return JSON.parse(fs.readFileSync(sourcesMetaPath, 'utf8')) } catch { return [] }
+  const sources = readJsonFile<any[]>(sourcesMetaPath, [])
+  return Array.isArray(sources) ? sources : []
 }
 
 const writeSources = (sources: any[]) => {
   ensureFiles()
-  fs.writeFileSync(sourcesMetaPath, JSON.stringify(sources, null, 2))
+  writeJsonFileAtomic(sourcesMetaPath, sources)
+}
+
+const readOrder = (): string[] => {
+  ensureFiles()
+  if (!fs.existsSync(orderPath)) return []
+  const order = readJsonFile<string[]>(orderPath, [])
+  return Array.isArray(order) ? order.filter(id => typeof id === 'string') : []
+}
+
+const writeOrder = (ids: string[]) => {
+  ensureFiles()
+  writeJsonFileAtomic(orderPath, ids)
+}
+
+const sortSources = (sources: any[]) => {
+  const order = readOrder()
+  if (!order.length) return sources
+  const positions = new Map(order.map((id, index) => [id, index]))
+  return [...sources].sort((a, b) => (positions.get(a.id) ?? 999999) - (positions.get(b.id) ?? 999999))
 }
 
 const generateId = (name?: string, fallbackFilename?: string): string => {
@@ -38,7 +59,7 @@ const generateId = (name?: string, fallbackFilename?: string): string => {
 }
 
 const enrichSources = (sources: any[]) => {
-  return sources.map(source => ({
+  return sortSources(sources).map(source => ({
     ...source,
     status: getApiStatus(source.id)?.status || (source.enabled ? 'unknown' : 'disabled'),
     error: getApiStatus(source.id)?.error || '',
@@ -153,7 +174,7 @@ const saveScript = async (filename: string, script: string, allowUnsafeVM = fals
     throw new Error(`源 "${analysis.metadata.name || filename}" 已存在`)
   }
 
-  fs.writeFileSync(path.join(scriptsDir, id), script, 'utf8')
+  writeTextFileAtomic(path.join(scriptsDir, id), script, { backup: false })
 
   const item = {
     id,
@@ -254,6 +275,7 @@ export const handleDelete = async (req: IncomingMessage, res: ServerResponse) =>
     const scriptPath = path.join(scriptsDir, id)
     if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath)
     writeSources(nextSources)
+    writeOrder(readOrder().filter(sourceId => sourceId !== id))
     await initUserApis()
     sendJson(res, 200, { success: true })
   } catch (error: any) {
@@ -265,9 +287,21 @@ export const handleReorder = async (req: IncomingMessage, res: ServerResponse) =
   try {
     const { ids } = await readJson(req)
     if (!Array.isArray(ids)) throw new Error('ids must be an array')
-    fs.writeFileSync(orderPath, JSON.stringify(ids, null, 2))
+    const sources = readSources()
+    const knownIds = new Set(sources.map(source => source.id))
+    const seen = new Set<string>()
+    const orderedIds: string[] = []
+    for (const id of ids) {
+      if (typeof id !== 'string' || !knownIds.has(id) || seen.has(id)) continue
+      seen.add(id)
+      orderedIds.push(id)
+    }
+    for (const source of sources) {
+      if (!seen.has(source.id)) orderedIds.push(source.id)
+    }
+    writeOrder(orderedIds)
     await initUserApis()
-    sendJson(res, 200, { success: true })
+    sendJson(res, 200, { success: true, order: orderedIds })
   } catch (error: any) {
     sendError(res, 500, error.message)
   }

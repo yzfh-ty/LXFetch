@@ -20,6 +20,7 @@ const state = {
   platforms: [],
   sources: [],
   tasks: [],
+  taskStats: null,
   files: [],
   subscriptions: [],
   subscriptionIntervalMinutes: Number(localStorage.getItem(SUBSCRIPTION_INTERVAL_STORAGE_KEY) || 360),
@@ -106,6 +107,96 @@ const getOptions = () => ({
 
 const qualityLabel = (quality) => QUALITY_LABELS[quality] || quality || '';
 
+const displayValue = (value) => {
+  if (typeof value === 'boolean') return value ? '是' : '否';
+  if (typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.join(' -> ');
+  return value == null || value === '' ? '-' : String(value);
+};
+
+const renderConfigTable = (rows) => `
+  <table>
+    <tbody>
+      ${rows.map(([name, value]) => `
+        <tr>
+          <td>${escapeHtml(name)}</td>
+          <td>${escapeHtml(displayValue(value))}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+`;
+
+const renderConfigSummary = () => {
+  const el = $('config-summary');
+  if (!el) return;
+  const cfg = state.config;
+  if (!cfg) {
+    el.innerHTML = '<div class="meta">暂无配置</div>';
+    return;
+  }
+  const download = cfg.download || {};
+  const subscription = cfg.subscription || {};
+  const netease = cfg.netease || {};
+  const platformRows = (cfg.platforms || []).map(platform => ([
+    `${platform.name} (${platform.id})`,
+    [
+      platform.resolverEnabled ? '解析' : '',
+      platform.songListSupported ? '歌单' : '',
+      platform.leaderboardSupported ? '榜单' : '',
+      platform.userPlaylistSupported ? '用户歌单' : '',
+    ].filter(Boolean).join(' / ') || '-',
+  ]));
+
+  el.innerHTML = `
+    <div class="stack">
+      <div>
+        <h3>下载</h3>
+        ${renderConfigTable([
+          ['并发任务', download.maxConcurrent],
+          ['限速 bytes/s', download.throttleBytesPerSecond],
+          ['下载重试', download.maxRetries],
+          ['重试延迟 ms', download.retryDelayMs],
+          ['写入封面', download.embedCover],
+          ['写入歌词', download.embedLyric],
+          ['写入标签', download.writeTags],
+          ['元数据检查', download.verifyMetadata],
+          ['元数据缓存', download.cacheMetadata],
+          ['缓存过期天数', download.metadataCacheMaxAgeDays],
+          ['缓存大小上限', formatSize(download.metadataCacheMaxBytes || 0)],
+          ['跳过已存在', download.skipExisting],
+          ['低音质升级', download.upgradeExisting],
+        ])}
+      </div>
+      <div>
+        <h3>订阅</h3>
+        ${renderConfigTable([
+          ['每轮入队上限', subscription.maxTasksPerRun],
+          ['入队间隔 ms', subscription.taskCreateDelayMs],
+        ])}
+      </div>
+      <div>
+        <h3>音源</h3>
+        ${renderConfigTable([
+          ['网易云 Cookie', netease.cookieResolverEnabled],
+          ['音质顺序', cfg.qualityFallbackOrder || []],
+        ])}
+      </div>
+      <div>
+        <h3>平台</h3>
+        ${renderConfigTable(platformRows.length ? platformRows : [['平台', '-']])}
+      </div>
+    </div>
+  `;
+};
+
+const loadMetadataCacheStatus = async () => {
+  const el = $('metadata-cache-status');
+  if (!el) return;
+  const data = await api('/api/cache/metadata');
+  el.textContent = `缓存 ${formatSize(data.totalBytes || 0)}`;
+};
+
 const loadConfig = async () => {
   const data = await api('/api/config');
   state.config = data;
@@ -117,6 +208,8 @@ const loadConfig = async () => {
     neteaseStatus.textContent = enabled ? '网易云 Cookie 已启用' : '网易云 Cookie 未启用';
     neteaseStatus.className = `badge ${enabled ? 'ok' : 'warn'}`;
   }
+  await loadMetadataCacheStatus().catch(() => {});
+  renderConfigSummary();
   renderPlatforms();
 };
 
@@ -160,6 +253,9 @@ const activateView = (view) => {
   if (view === 'sources') {
     loadSources().catch(error => toast(error.message));
   }
+  if (view === 'config') {
+    loadConfig().catch(error => toast(error.message));
+  }
   if (view === 'subscriptions') {
     loadSubscriptions().catch(error => toast(error.message));
   }
@@ -177,7 +273,7 @@ const renderSources = () => {
     el.innerHTML = '<div class="meta">暂无音源</div>';
     return;
   }
-  el.innerHTML = state.sources.map(source => {
+  el.innerHTML = state.sources.map((source, index) => {
     const statusClass = source.status === 'success' ? 'ok' : (source.status === 'failed' ? 'fail' : 'warn');
     const platforms = (source.supportedSources || []).map(id => `<span class="badge">${escapeHtml(id)}</span>`).join('');
     const sourceId = encodeURIComponent(source.id);
@@ -191,12 +287,32 @@ const renderSources = () => {
         <div class="badges">${platforms || '<span class="badge warn">无平台</span>'}</div>
         ${source.error ? `<div class="meta">${escapeHtml(source.error)}</div>` : ''}
         <div class="row-actions">
+          <button type="button" onclick="moveSource(decodeURIComponent('${sourceId}'), -1)" ${index <= 0 ? 'disabled' : ''}>上移</button>
+          <button type="button" onclick="moveSource(decodeURIComponent('${sourceId}'), 1)" ${index >= state.sources.length - 1 ? 'disabled' : ''}>下移</button>
           <button type="button" onclick="toggleSource(decodeURIComponent('${sourceId}'), ${!source.enabled})">${source.enabled ? '禁用' : '启用'}</button>
           <button type="button" class="danger" onclick="deleteSource(decodeURIComponent('${sourceId}'))">删除</button>
         </div>
       </div>
     `;
   }).join('');
+};
+
+window.moveSource = async (id, direction) => {
+  const index = state.sources.findIndex(source => source.id === id);
+  const nextIndex = index + direction;
+  if (index < 0 || nextIndex < 0 || nextIndex >= state.sources.length) return;
+  const ordered = state.sources.map(source => source.id);
+  [ordered[index], ordered[nextIndex]] = [ordered[nextIndex], ordered[index]];
+  try {
+    await api('/api/sources/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ ids: ordered }),
+    });
+    toast('音源顺序已更新');
+    await loadSources();
+  } catch (error) {
+    toast(error.message);
+  }
 };
 
 window.toggleSource = async (id, enabled) => {
@@ -226,6 +342,7 @@ window.deleteSource = async (id) => {
 const loadTasks = async () => {
   const data = await api('/api/download/tasks');
   state.tasks = data.tasks || [];
+  state.taskStats = data.stats || null;
   renderTasks();
 };
 
@@ -241,7 +358,34 @@ const statusName = (status) => ({
   stopped: '停止',
 }[status] || status);
 
+const errorCategoryName = (category) => ({
+  resolve: '解析',
+  quality: '音质',
+  network: '网络',
+  remote: '远端',
+  filesystem: '文件',
+  metadata: '元数据',
+  tagging: '标签',
+  verification: '检查',
+  duplicate: '已存在',
+  unknown: '未知',
+}[category] || category);
+
 const renderTasks = () => {
+  const summary = $('tasks-summary');
+  if (summary) {
+    const stats = state.taskStats || {};
+    const byStatus = stats.byStatus || {};
+    const parts = [
+      `总数 ${Number(stats.total || 0)}`,
+      `活动 ${Number(stats.active || 0)}`,
+      `速度 ${formatSize(stats.speed || 0)}/s`,
+      `等待 ${Number(byStatus.waiting || 0)}`,
+      `下载 ${Number(byStatus.downloading || 0)}`,
+      `失败 ${Number(byStatus.failed || 0)}`,
+    ];
+    summary.textContent = parts.join(' · ');
+  }
   const el = $('tasks-list');
   if (!state.tasks.length) {
     el.innerHTML = '<div class="meta">暂无任务</div>';
@@ -252,6 +396,7 @@ const renderTasks = () => {
     const qualityText = task.requestedQuality && task.requestedQuality !== task.quality
       ? `${qualityLabel(task.requestedQuality)} -> ${qualityLabel(task.quality)}`
       : qualityLabel(task.quality);
+    const retryText = task.maxRetries ? `重试 ${task.retryCount || 0}/${task.maxRetries}` : '';
     const errors = [
       ...(task.metadata?.metadataErrors || []),
       ...(task.metadata?.verifyErrors || []),
@@ -271,11 +416,13 @@ const renderTasks = () => {
           <span class="badge ${task.metadata?.lyricFetched ? 'ok' : 'warn'}">歌词</span>
           <span class="badge ${task.metadata?.tagsWritten ? 'ok' : 'warn'}">标签</span>
           <span class="badge ${task.metadata?.verified ? 'ok' : 'warn'}">检查</span>
+          ${task.errorCategory ? `<span class="badge warn">${escapeHtml(errorCategoryName(task.errorCategory))}</span>` : ''}
+          ${task.retryCount ? `<span class="badge warn">${escapeHtml(retryText)}</span>` : ''}
         </div>
         ${task.error ? `<div class="meta">${escapeHtml(task.error)}</div>` : ''}
         ${errors.length ? `<div class="meta">${escapeHtml(errors.join('；'))}</div>` : ''}
         <div class="row-actions">
-          ${['waiting', 'resolving', 'downloading', 'metadata_fetching', 'tagging', 'verifying'].includes(task.status) ? `<button type="button" onclick="stopTask('${task.id}')">停止</button>` : ''}
+          ${['waiting', 'resolving', 'downloading'].includes(task.status) ? `<button type="button" onclick="stopTask('${task.id}')">停止</button>` : ''}
           ${['failed', 'stopped'].includes(task.status) ? `<button type="button" onclick="retryTask('${task.id}')">重试</button>` : ''}
           ${task.attempts?.length ? `<button type="button" onclick="showAttempts('${task.id}')">attempts</button>` : ''}
         </div>
@@ -298,6 +445,39 @@ window.retryTask = async (id) => {
     await api(`/api/download/tasks/${encodeURIComponent(id)}/retry`, { method: 'POST' });
     toast('已创建重试任务');
     await loadTasks();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+const clearTasks = async (statuses, label) => {
+  try {
+    const result = await api('/api/download/tasks/clear', {
+      method: 'POST',
+      body: JSON.stringify({ statuses }),
+    });
+    await loadTasks();
+    toast(`${label} ${result.removed || 0} 个任务`);
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+const retryFailedTasks = async () => {
+  try {
+    const result = await api('/api/download/tasks/retry-failed', { method: 'POST' });
+    await loadTasks();
+    toast(`已创建 ${result.created || result.count || 0} 个重试任务，复用 ${result.reused || 0} 个`);
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+const stopActiveTasks = async () => {
+  try {
+    const result = await api('/api/download/tasks/stop-active', { method: 'POST' });
+    await loadTasks();
+    toast(`已停止 ${result.count || 0} 个任务`);
   } catch (error) {
     toast(error.message);
   }
@@ -393,6 +573,8 @@ const renderSubscriptions = () => {
           <span class="badge ${sub.enabled ? 'ok' : 'warn'}">${sub.enabled ? '启用' : '暂停'}</span>
           <span class="badge">发现 ${Number(sub.lastFoundCount || 0)}</span>
           <span class="badge">新增 ${Number(sub.lastCreatedCount || 0)}</span>
+          <span class="badge">跳过 ${Number(sub.lastSkippedCount || 0)}</span>
+          ${sub.lastInvalidCount ? `<span class="badge warn">无效 ${Number(sub.lastInvalidCount || 0)}</span>` : ''}
           <span class="badge">已记录 ${sub.downloadedKeys?.length || 0}</span>
         </div>
         <div class="meta">上次检查：${formatTime(sub.lastCheckedAt)} · 上次更新：${formatTime(sub.lastUpdatedAt)}</div>
@@ -400,6 +582,7 @@ const renderSubscriptions = () => {
         <div class="row-actions">
           <button type="button" onclick="runSubscription('${sub.id}')">立即更新</button>
           <button type="button" onclick="toggleSubscription('${sub.id}', ${!sub.enabled})">${sub.enabled ? '暂停' : '启用'}</button>
+          <button type="button" onclick="resetSubscription('${sub.id}')">重置记录</button>
           <button type="button" class="danger" onclick="deleteSubscription('${sub.id}')">删除</button>
         </div>
       </div>
@@ -436,6 +619,17 @@ window.toggleSubscription = async (id, enabled) => {
       body: JSON.stringify({ enabled }),
     });
     toast(enabled ? '订阅已启用' : '订阅已暂停');
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.resetSubscription = async (id) => {
+  if (!confirm('清空该订阅的已记录歌曲？')) return;
+  try {
+    await api(`/api/subscriptions/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+    toast('订阅记录已重置');
     await loadSubscriptions();
   } catch (error) {
     toast(error.message);
@@ -811,11 +1005,12 @@ const renderFiles = () => {
       <tbody>
         ${state.files.map(file => {
           const tagClass = file.tagStatus === 'ok' ? 'ok' : (file.tagStatus === 'error' ? 'fail' : 'warn');
+          const actualQuality = file.actualQualityLabel || file.actualQuality || '';
           return `
             <tr>
               <td>${escapeHtml(file.name)}<div class="meta">${escapeHtml(file.singer)} · ${escapeHtml(file.album || '')}</div></td>
               <td>${escapeHtml(file.filename)}<div class="meta">${escapeHtml(file.duration || '')} · ${escapeHtml(file.bitrate || '')}kbps</div></td>
-              <td>${escapeHtml(file.quality)}</td>
+              <td>${escapeHtml(qualityLabel(file.quality))}<div class="meta">${escapeHtml(actualQuality || '-')}</div></td>
               <td>${formatSize(file.size)}</td>
               <td>
                 <span class="badge ${tagClass}">${escapeHtml(file.tagStatus)}</span>
@@ -1030,9 +1225,30 @@ const bindEvents = () => {
   });
 
   $('refresh-sources').addEventListener('click', () => loadSources().catch(error => toast(error.message)));
+  $('cleanup-metadata-cache').addEventListener('click', async () => {
+    try {
+      const result = await api('/api/cache/metadata/cleanup', { method: 'POST', body: JSON.stringify({}) });
+      await loadMetadataCacheStatus();
+      toast(`已清理 ${result.deletedFiles || 0} 个缓存文件`);
+    } catch (error) {
+      toast(error.message);
+    }
+  });
   $('refresh-subscriptions').addEventListener('click', () => loadSubscriptions().catch(error => toast(error.message)));
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
+  $('retry-failed-tasks').addEventListener('click', () => retryFailedTasks());
+  $('stop-active-tasks').addEventListener('click', () => stopActiveTasks());
+  $('clear-finished-tasks').addEventListener('click', () => clearTasks(['finished'], '已清理完成'));
+  $('clear-failed-tasks').addEventListener('click', () => clearTasks(['failed', 'stopped'], '已清理失败/停止'));
   $('refresh-files').addEventListener('click', () => loadFiles().catch(error => toast(error.message)));
+  $('refresh-config').addEventListener('click', async () => {
+    try {
+      await loadConfig();
+      toast('配置已刷新');
+    } catch (error) {
+      toast(error.message);
+    }
+  });
 };
 
 const init = async () => {

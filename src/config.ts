@@ -22,11 +22,18 @@ export interface AppConfig {
     dir: string
     maxConcurrent: number
     throttleBytesPerSecond: number
+    maxRetries: number
+    retryDelayMs: number
     filenamePattern: string
     embedCover: boolean
     embedLyric: boolean
     writeTags: boolean
     verifyMetadata: boolean
+    cacheMetadata: boolean
+    metadataCacheMaxAgeDays: number
+    metadataCacheMaxBytes: number
+    skipExisting: boolean
+    upgradeExisting: boolean
   }
   subscription: {
     maxTasksPerRun: number
@@ -53,11 +60,18 @@ const defaults: AppConfig = {
     dir: './data/downloads',
     maxConcurrent: 1,
     throttleBytesPerSecond: 0,
+    maxRetries: 2,
+    retryDelayMs: 2000,
     filenamePattern: '{name} - {singer}',
     embedCover: true,
     embedLyric: true,
     writeTags: true,
     verifyMetadata: true,
+    cacheMetadata: true,
+    metadataCacheMaxAgeDays: 90,
+    metadataCacheMaxBytes: 200 * 1024 * 1024,
+    skipExisting: true,
+    upgradeExisting: true,
   },
   subscription: {
     maxTasksPerRun: 0,
@@ -92,9 +106,10 @@ export const tasksFile = path.join(dataDir, 'tasks.json')
 export const subscriptionsFile = path.join(dataDir, 'subscriptions.json')
 export const downloadsDir = path.resolve(process.cwd(), appConfig.download.dir)
 export const downloadIndexFile = path.join(downloadsDir, 'downloads_index.json')
+export const metadataCacheDir = path.join(dataDir, 'cache', 'metadata')
 
 export const ensureRuntimeDirs = () => {
-  for (const dir of [dataDir, sourcesDir, scriptsDir, downloadsDir]) {
+  for (const dir of [dataDir, sourcesDir, scriptsDir, downloadsDir, metadataCacheDir]) {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
   }
 }

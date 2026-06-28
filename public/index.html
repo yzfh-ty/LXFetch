@@ -28,6 +28,7 @@
         <button class="menu-item" type="button" data-view="sources">音源</button>
         <button class="menu-item" type="button" data-view="tasks">任务</button>
         <button class="menu-item" type="button" data-view="files">文件</button>
+        <button class="menu-item" type="button" data-view="config">配置</button>
       </nav>
 
     </aside>
@@ -163,6 +164,8 @@
           <label><input id="opt-tags" type="checkbox" checked>标签</label>
           <label><input id="opt-verify" type="checkbox" checked>检查</label>
           <span id="netease-cookie-status" class="badge warn">网易云 Cookie 未启用</span>
+          <span id="metadata-cache-status" class="badge">缓存 0 B</span>
+          <button id="cleanup-metadata-cache" type="button">清理缓存</button>
         </div>
 
         <div class="source-grid">
@@ -196,8 +199,15 @@
       <section id="view-tasks" class="panel view-section">
         <div class="panel-head">
           <h2>任务</h2>
-          <button id="refresh-tasks" type="button">刷新</button>
+          <div class="row-actions">
+            <button id="refresh-tasks" type="button">刷新</button>
+            <button id="retry-failed-tasks" type="button">重试失败</button>
+            <button id="stop-active-tasks" type="button">停止可中断</button>
+            <button id="clear-finished-tasks" type="button">清理完成</button>
+            <button id="clear-failed-tasks" type="button">清理失败/停止</button>
+          </div>
         </div>
+        <div id="tasks-summary" class="meta summary-line">总数 0 · 活动 0 · 速度 0 B/s</div>
         <div id="tasks-list" class="list task-list"></div>
       </section>
 
@@ -207,6 +217,14 @@
           <button id="refresh-files" type="button">刷新</button>
         </div>
         <div id="files-list" class="table-wrap"></div>
+      </section>
+
+      <section id="view-config" class="panel view-section">
+        <div class="panel-head">
+          <h2>配置</h2>
+          <button id="refresh-config" type="button">刷新</button>
+        </div>
+        <div id="config-summary" class="table-wrap"></div>
       </section>
     </section>
   </main>

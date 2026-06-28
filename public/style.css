@@ -248,6 +248,10 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.summary-line {
+  margin: -4px 0 10px;
+}
+
 .badges {
   display: flex;
   flex-wrap: wrap;
@@ -418,13 +422,18 @@ th {
   }
   .sidebar {
     position: static;
+    min-width: 0;
   }
   .menu {
-    grid-template-columns: repeat(7, minmax(84px, 1fr));
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
     overflow-x: auto;
     padding-bottom: 2px;
   }
   .menu-item {
+    flex: 0 0 84px;
     text-align: center;
     white-space: nowrap;
   }

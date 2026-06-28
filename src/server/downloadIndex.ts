@@ -3,6 +3,9 @@ import path from 'node:path'
 import { downloadIndexFile, downloadsDir } from '../config'
 import type { BasicMetadata, VerifyResult } from './metadataResolver'
 import { resolveInside } from './pathSafety'
+import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from './jsonStore'
+import { getSongKey } from './songIdentity'
+import { getQualityRank } from '../common/constants'
 
 export interface DownloadIndexItem {
   id: string
@@ -20,6 +23,8 @@ export interface DownloadIndexItem {
   bitrate?: number
   sampleRate?: number
   bitDepth?: number
+  actualQuality?: string
+  actualQualityLabel?: string
   hasCover: boolean
   hasLyric: boolean
   hasEmbedLyric: boolean
@@ -33,22 +38,18 @@ export interface DownloadIndexItem {
 
 const ensureIndexFile = () => {
   if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true })
-  if (!fs.existsSync(downloadIndexFile)) fs.writeFileSync(downloadIndexFile, '[]')
+  ensureJsonFile(downloadIndexFile, [])
 }
 
 export const readDownloadIndex = (): DownloadIndexItem[] => {
   ensureIndexFile()
-  try {
-    const parsed = JSON.parse(fs.readFileSync(downloadIndexFile, 'utf8'))
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
+  const parsed = readJsonFile<DownloadIndexItem[]>(downloadIndexFile, [])
+  return Array.isArray(parsed) ? parsed : []
 }
 
 export const writeDownloadIndex = (items: DownloadIndexItem[]) => {
   ensureIndexFile()
-  fs.writeFileSync(downloadIndexFile, JSON.stringify(items, null, 2))
+  writeJsonFileAtomic(downloadIndexFile, items)
 }
 
 export const upsertDownloadIndex = (
@@ -80,6 +81,8 @@ export const upsertDownloadIndex = (
     bitrate: verify.bitrate,
     sampleRate: verify.sampleRate,
     bitDepth: verify.bitDepth,
+    actualQuality: verify.actualQuality,
+    actualQualityLabel: verify.actualQualityLabel,
     hasCover: verify.hasCover,
     hasLyric: verify.hasLyric,
     hasEmbedLyric: verify.hasEmbedLyric,
@@ -110,6 +113,29 @@ export const removeDownloadIndexItem = (filename: string) => {
 
 export const getDownloadIndexItem = (filename: string) => {
   return readDownloadIndex().find(item => item.filename === filename)
+}
+
+export const getDownloadedItemBySongInfo = (songInfo: any) => {
+  const key = getSongKey(songInfo)
+  if (!key) return undefined
+  const matches = readDownloadIndex().filter(item => {
+    const itemKey = item.songInfo
+      ? getSongKey(item.songInfo)
+      : getSongKey({ source: item.source, songmid: item.songId })
+    if (itemKey !== key) return false
+    try {
+      return fs.existsSync(resolveInside(downloadsDir, item.filename))
+    } catch {
+      return false
+    }
+  })
+  matches.sort((a, b) => {
+    const rankA = getQualityRank(a.actualQuality || a.quality)
+    const rankB = getQualityRank(b.actualQuality || b.quality)
+    if (rankA !== rankB) return rankA - rankB
+    return (b.size || 0) - (a.size || 0)
+  })
+  return matches[0]
 }
 
 export const deleteDownloadedFile = (filename: string) => {

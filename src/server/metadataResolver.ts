@@ -1,5 +1,9 @@
+import crypto from 'node:crypto'
+import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
+import { appConfig, metadataCacheDir } from '../config'
+import { readJsonFile, writeJsonFileAtomic, writeTextFileAtomic } from './jsonStore'
 import { getLyricText } from './musicResolver'
 
 const localRequire = createRequire(__filename)
@@ -38,6 +42,8 @@ export interface VerifyResult {
   bitrate?: number
   sampleRate?: number
   bitDepth?: number
+  actualQuality?: string
+  actualQualityLabel?: string
   title?: string
   artist?: string
   album?: string
@@ -51,6 +57,149 @@ const formatPlayTime = (durationMs: number) => {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${minutes < 10 ? '0' : ''}${minutes}:${seconds < 10 ? '0' : ''}${seconds}`
+}
+
+const ensureCacheDir = (type: string) => {
+  const dir = path.join(metadataCacheDir, type)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+const cacheKey = (value: string) => crypto.createHash('sha1').update(value).digest('hex')
+
+const readTextCache = (type: string, key: string) => {
+  if (!appConfig.download.cacheMetadata) return undefined
+  const filePath = path.join(ensureCacheDir(type), `${key}.txt`)
+  if (!fs.existsSync(filePath)) return undefined
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+const writeTextCache = (type: string, key: string, value: string) => {
+  if (!appConfig.download.cacheMetadata || !value) return
+  writeTextFileAtomic(path.join(ensureCacheDir(type), `${key}.txt`), value, { backup: false })
+}
+
+const readCoverCache = (key: string): { data: Buffer, mime: string } | undefined => {
+  if (!appConfig.download.cacheMetadata) return undefined
+  const filePath = path.join(ensureCacheDir('covers'), `${key}.json`)
+  if (!fs.existsSync(filePath)) return undefined
+  const cached = readJsonFile<{ data: string, mime: string } | null>(filePath, null)
+  if (!cached?.data) return undefined
+  try {
+    const data = Buffer.from(cached.data, 'base64')
+    if (!data.length) return undefined
+    return { data, mime: cached.mime || 'image/jpeg' }
+  } catch {
+    return undefined
+  }
+}
+
+const writeCoverCache = (key: string, cover: { data: Buffer, mime: string }) => {
+  if (!appConfig.download.cacheMetadata || !cover.data?.length) return
+  writeJsonFileAtomic(path.join(ensureCacheDir('covers'), `${key}.json`), {
+    mime: cover.mime || 'image/jpeg',
+    data: cover.data.toString('base64'),
+  }, { backup: false })
+}
+
+interface CacheFileInfo {
+  path: string
+  size: number
+  mtimeMs: number
+}
+
+const listCacheFiles = () => {
+  const files: CacheFileInfo[] = []
+  if (!fs.existsSync(metadataCacheDir)) return files
+
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const filePath = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(filePath)
+        continue
+      }
+      if (!entry.isFile()) continue
+      try {
+        const stat = fs.statSync(filePath)
+        files.push({
+          path: filePath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        })
+      } catch {}
+    }
+  }
+
+  walk(metadataCacheDir)
+  return files
+}
+
+export const getMetadataCacheStats = () => {
+  const files = listCacheFiles()
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
+  return {
+    files: files.length,
+    totalBytes,
+    oldestAt: files.length ? Math.min(...files.map(file => file.mtimeMs)) : 0,
+    newestAt: files.length ? Math.max(...files.map(file => file.mtimeMs)) : 0,
+    maxAgeDays: appConfig.download.metadataCacheMaxAgeDays,
+    maxBytes: appConfig.download.metadataCacheMaxBytes,
+  }
+}
+
+export const cleanupMetadataCache = (options: {
+  maxAgeDays?: number
+  maxBytes?: number
+  force?: boolean
+} = {}) => {
+  const maxAgeDays = Math.max(0, Number(options.maxAgeDays ?? appConfig.download.metadataCacheMaxAgeDays ?? 0))
+  const maxBytes = Math.max(0, Number(options.maxBytes ?? appConfig.download.metadataCacheMaxBytes ?? 0))
+  const force = !!options.force
+  const now = Date.now()
+  const maxAgeMs = maxAgeDays > 0 ? maxAgeDays * 24 * 60 * 60 * 1000 : 0
+  const deleted = new Set<string>()
+  let deletedBytes = 0
+
+  const removeFile = (file: CacheFileInfo) => {
+    if (deleted.has(file.path)) return
+    try {
+      fs.unlinkSync(file.path)
+      deleted.add(file.path)
+      deletedBytes += file.size
+    } catch {}
+  }
+
+  let files = listCacheFiles()
+  if (force) {
+    for (const file of files) removeFile(file)
+  } else {
+    if (maxAgeMs > 0) {
+      for (const file of files) {
+        if (now - file.mtimeMs > maxAgeMs) removeFile(file)
+      }
+    }
+
+    files = listCacheFiles().sort((a, b) => a.mtimeMs - b.mtimeMs)
+    let totalBytes = files.reduce((sum, file) => sum + file.size, 0)
+    if (maxBytes > 0 && totalBytes > maxBytes) {
+      for (const file of files) {
+        if (totalBytes <= maxBytes) break
+        removeFile(file)
+        totalBytes -= file.size
+      }
+    }
+  }
+
+  return {
+    deletedFiles: deleted.size,
+    deletedBytes,
+    ...getMetadataCacheStats(),
+  }
 }
 
 export const normalizeSongId = (songInfo: any): string => {
@@ -101,6 +250,59 @@ const fetchCover = async (url: string): Promise<{ data: Buffer, mime: string } |
   return { data, mime }
 }
 
+const detectActualQuality = (input: {
+  ext?: string
+  bitrate?: number
+  sampleRate?: number
+  bitDepth?: number
+}) => {
+  const ext = String(input.ext || '').toLowerCase()
+  const bitrate = Number(input.bitrate || 0)
+  const sampleRate = Number(input.sampleRate || 0)
+  const bitDepth = Number(input.bitDepth || 0)
+  const details = [
+    bitDepth ? `${bitDepth}bit` : '',
+    sampleRate ? `${Math.round(sampleRate / 1000)}kHz` : '',
+    bitrate ? `${bitrate}kbps` : '',
+  ].filter(Boolean).join(' / ')
+
+  if (['flac', 'wav', 'ape', 'alac'].includes(ext)) {
+    const actualQuality = bitDepth >= 24 || sampleRate > 48000 ? 'flac24bit' : ext
+    return {
+      actualQuality,
+      actualQualityLabel: `${ext.toUpperCase()}${details ? ` ${details}` : ''}`,
+    }
+  }
+
+  if (ext === 'mp3' || ext === 'mpga') {
+    const actualQuality = bitrate >= 300 ? '320k' : bitrate >= 180 ? '192k' : '128k'
+    return {
+      actualQuality,
+      actualQualityLabel: `MP3${details ? ` ${details}` : ''}`,
+    }
+  }
+
+  if (['m4a', 'aac', 'ogg', 'opus'].includes(ext)) {
+    return {
+      actualQuality: ext,
+      actualQualityLabel: `${ext.toUpperCase()}${details ? ` ${details}` : ''}`,
+    }
+  }
+
+  return {
+    actualQuality: ext || 'unknown',
+    actualQualityLabel: details || ext || 'unknown',
+  }
+}
+
+const isLosslessRequested = (quality: string) => {
+  return ['master', 'flac24bit', 'flac', 'wav', 'ape'].includes(String(quality || '').toLowerCase())
+}
+
+const isLossyActual = (quality: string) => {
+  return ['128k', '192k', '320k', 'mp3', 'm4a', 'aac', 'ogg', 'opus'].includes(String(quality || '').toLowerCase())
+}
+
 export const collectMetadata = async (
   songInfo: any,
   quality: string,
@@ -113,7 +315,12 @@ export const collectMetadata = async (
 
   if (options.embedLyric) {
     try {
-      lyric = await getLyricText({ ...songInfo, ...base })
+      const key = cacheKey(`${base.source}:${base.songId}:lyric`)
+      lyric = readTextCache('lyrics', key) || ''
+      if (!lyric) {
+        lyric = await getLyricText({ ...songInfo, ...base })
+        writeTextCache('lyrics', key, lyric)
+      }
     } catch (error: any) {
       errors.push(error.message || '歌词下载失败')
     }
@@ -121,7 +328,12 @@ export const collectMetadata = async (
 
   if (options.embedCover && base.img) {
     try {
-      cover = await fetchCover(base.img)
+      const key = cacheKey(base.img)
+      cover = readCoverCache(key)
+      if (!cover) {
+        cover = await fetchCover(base.img)
+        if (cover) writeCoverCache(key, cover)
+      }
     } catch (error: any) {
       errors.push(error.message || '封面下载失败')
     }
@@ -202,10 +414,19 @@ export const verifyFileMetadata = async (
   try {
     tagger = new MusicTagger()
     tagger.loadPath(filePath)
+    result.size = fs.statSync(filePath).size
     result.duration = tagger.duration ? formatPlayTime(tagger.duration) : ''
     result.bitrate = tagger.bitRate
     result.sampleRate = tagger.sampleRate
     result.bitDepth = tagger.bitDepth
+    const detected = detectActualQuality({
+      ext: result.ext,
+      bitrate: result.bitrate,
+      sampleRate: result.sampleRate,
+      bitDepth: result.bitDepth,
+    })
+    result.actualQuality = detected.actualQuality
+    result.actualQualityLabel = detected.actualQualityLabel
     result.title = tagger.title || ''
     result.artist = tagger.artist || ''
     result.album = tagger.album || ''
@@ -220,6 +441,12 @@ export const verifyFileMetadata = async (
     if (options.embedCover && !result.hasCover) result.warnings.push('封面未写入')
     if (options.embedLyric && !result.hasLyric) result.warnings.push('歌词未写入')
     if (!result.duration) result.warnings.push('duration 缺失')
+    if (isLosslessRequested(expected.quality) && isLossyActual(result.actualQuality || '')) {
+      result.warnings.push(`请求 ${expected.quality}，实际检测为 ${result.actualQualityLabel || result.actualQuality}`)
+    }
+    if (String(expected.quality).toLowerCase() === 'flac24bit' && result.actualQuality !== 'flac24bit') {
+      result.warnings.push(`请求 flac24bit，实际检测为 ${result.actualQualityLabel || result.actualQuality}`)
+    }
 
     result.verified = result.errors.length === 0
     return result
