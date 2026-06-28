@@ -1,0 +1,31 @@
+{
+  "name": "lxfetch",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tsx -r tsconfig-paths/register src/index.ts",
+    "build": "rimraf server && tsc --project tsconfig.json && tsc-alias -p tsconfig.json",
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "crypto-js": "^4.2.0",
+    "file-type": "^22.0.0",
+    "music-tag-native": "^0.2.4",
+    "needle": "^3.3.1",
+    "socks-proxy-agent": "^10.0.0",
+    "tunnel": "^0.0.6",
+    "vm2": "^3.11.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/tunnel": "^0.0.7",
+    "rimraf": "^6.0.1",
+    "tsc-alias": "^1.8.16",
+    "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.20.0",
+    "typescript": "^6.0.0"
+  }
+}

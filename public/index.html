@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LXFetch</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>LXFetch</h1>
+      <span id="server-status">未连接</span>
+    </div>
+    <form id="admin-form" class="admin-form">
+      <input id="admin-password" type="password" placeholder="管理员密码" autocomplete="current-password">
+      <button type="submit">验证</button>
+    </form>
+  </header>
+
+  <main class="layout">
+    <aside class="panel sources-panel">
+      <div class="panel-head">
+        <h2>音源</h2>
+        <button id="refresh-sources" type="button">刷新</button>
+      </div>
+
+      <form id="source-url-form" class="stack">
+        <label for="source-url">URL 导入</label>
+        <div class="inline">
+          <input id="source-url" type="url" placeholder="https://example.com/source.js">
+          <button type="submit">导入</button>
+        </div>
+      </form>
+
+      <form id="source-file-form" class="stack">
+        <label for="source-file">文件上传</label>
+        <div class="inline">
+          <input id="source-file" type="file" accept=".js,text/javascript">
+          <button type="submit">上传</button>
+        </div>
+      </form>
+
+      <label class="checkline">
+        <input id="allow-unsafe-vm" type="checkbox">
+        <span>允许 unsafe VM</span>
+      </label>
+
+      <div id="sources-list" class="list"></div>
+    </aside>
+
+    <section class="panel work-panel">
+      <div class="tabs">
+        <button class="tab active" type="button" data-tab="search">搜索</button>
+        <button class="tab" type="button" data-tab="songlist">歌单</button>
+        <button class="tab" type="button" data-tab="leaderboard">榜单</button>
+        <button class="tab" type="button" data-tab="json">songInfo</button>
+      </div>
+
+      <section id="tab-search" class="tab-body active">
+        <form id="search-form" class="searchbar">
+          <select id="search-source"></select>
+          <input id="search-keyword" type="search" placeholder="歌曲 / 歌手">
+          <button type="submit">搜索</button>
+        </form>
+        <div id="search-results" class="table-wrap"></div>
+      </section>
+
+      <section id="tab-songlist" class="tab-body">
+        <div class="stack">
+          <form id="songlist-search-form" class="searchbar">
+            <select id="songlist-source"></select>
+            <input id="songlist-keyword" type="search" placeholder="歌单名称">
+            <button type="submit">搜索歌单</button>
+          </form>
+          <div class="filterbar">
+            <select id="songlist-sort"></select>
+            <select id="songlist-tag"></select>
+            <button id="songlist-load" type="button">加载歌单</button>
+            <button id="songlist-tags-refresh" type="button">刷新标签</button>
+          </div>
+          <div class="filterbar userbar">
+            <input id="songlist-uid" type="text" placeholder="用户 UID">
+            <button id="songlist-user" type="button">用户歌单</button>
+          </div>
+        </div>
+        <div class="browser-grid">
+          <div>
+            <div class="subhead">
+              <h3>歌单</h3>
+              <div class="row-actions">
+                <button id="songlist-prev" type="button">上一页</button>
+                <button id="songlist-next" type="button">下一页</button>
+              </div>
+            </div>
+            <div id="songlist-results" class="compact-list"></div>
+          </div>
+          <div>
+            <div class="subhead">
+              <h3 id="songlist-detail-title">歌曲</h3>
+              <div class="row-actions">
+                <button id="songlist-detail-download-page" type="button">下载本页</button>
+                <button id="songlist-detail-prev" type="button">上一页</button>
+                <button id="songlist-detail-next" type="button">下一页</button>
+              </div>
+            </div>
+            <div id="songlist-detail" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-leaderboard" class="tab-body">
+        <div class="filterbar stack-tight">
+          <select id="leaderboard-source"></select>
+          <button id="leaderboard-refresh" type="button">刷新榜单</button>
+        </div>
+        <div class="browser-grid board-grid">
+          <div>
+            <div class="subhead">
+              <h3>榜单</h3>
+            </div>
+            <div id="leaderboard-boards" class="compact-list"></div>
+          </div>
+          <div>
+            <div class="subhead">
+              <h3 id="leaderboard-title">歌曲</h3>
+              <div class="row-actions">
+                <button id="leaderboard-download-page" type="button">下载本页</button>
+                <button id="leaderboard-prev" type="button">上一页</button>
+                <button id="leaderboard-next" type="button">下一页</button>
+              </div>
+            </div>
+            <div id="leaderboard-songs" class="table-wrap"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-json" class="tab-body">
+        <div class="json-grid">
+          <textarea id="songinfo-json" spellcheck="false" placeholder='{"source":"kw","name":"...","singer":"...","songmid":"..."}'></textarea>
+          <div class="stack">
+            <label for="json-quality">音质</label>
+            <select id="json-quality">
+              <option value="128k">128k</option>
+              <option value="192k">192k</option>
+              <option value="320k" selected>320k</option>
+              <option value="flac">flac</option>
+              <option value="flac24bit">flac24bit</option>
+              <option value="master">master</option>
+            </select>
+            <button id="json-download" type="button">创建任务</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="options-line">
+        <label><input id="opt-cover" type="checkbox" checked>封面</label>
+        <label><input id="opt-lyric" type="checkbox" checked>歌词</label>
+        <label><input id="opt-tags" type="checkbox" checked>标签</label>
+        <label><input id="opt-verify" type="checkbox" checked>检查</label>
+      </div>
+    </section>
+
+    <aside class="panel tasks-panel">
+      <div class="panel-head">
+        <h2>任务</h2>
+        <button id="refresh-tasks" type="button">刷新</button>
+      </div>
+      <div id="tasks-list" class="list"></div>
+    </aside>
+  </main>
+
+  <section class="panel files-panel">
+    <div class="panel-head">
+      <h2>文件</h2>
+      <button id="refresh-files" type="button">刷新</button>
+    </div>
+    <div id="files-list" class="table-wrap"></div>
+  </section>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
