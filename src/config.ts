@@ -90,11 +90,82 @@ const mergeConfig = (base: AppConfig, override: any): AppConfig => ({
   subscription: { ...base.subscription, ...(override.subscription || {}) },
 })
 
+const getEnv = (...names: string[]) => {
+  for (const name of names) {
+    const value = process.env[name]
+    if (value != null && value !== '') return value
+  }
+  return undefined
+}
+
+const getEnvNumber = (...names: string[]) => {
+  const value = getEnv(...names)
+  if (value == null) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+const getEnvBoolean = (...names: string[]) => {
+  const value = getEnv(...names)
+  if (value == null) return undefined
+  if (/^(1|true|yes|on)$/i.test(value)) return true
+  if (/^(0|false|no|off)$/i.test(value)) return false
+  return undefined
+}
+
+const compactObject = <T extends Record<string, any>>(value: T) => {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined))
+}
+
+const getEnvConfig = () => {
+  return {
+    server: compactObject({
+      host: getEnv('LXFETCH_HOST', 'HOST'),
+      port: getEnvNumber('LXFETCH_PORT', 'PORT'),
+    }),
+    auth: compactObject({
+      adminPassword: getEnv('LXFETCH_ADMIN_PASSWORD', 'ADMIN_PASSWORD'),
+    }),
+    source: compactObject({
+      allowUnsafeVM: getEnvBoolean('LXFETCH_ALLOW_UNSAFE_VM'),
+    }),
+    netease: compactObject({
+      cookie: getEnv('NETEASE_COOKIE', 'NETEASE_COOKIES', 'WY_COOKIE'),
+      cookieFile: getEnv('NETEASE_COOKIE_FILE', 'WY_COOKIE_FILE'),
+    }),
+    download: compactObject({
+      dir: getEnv('LXFETCH_DOWNLOAD_DIR', 'DOWNLOAD_DIR'),
+      maxConcurrent: getEnvNumber('LXFETCH_MAX_CONCURRENT'),
+      throttleBytesPerSecond: getEnvNumber('LXFETCH_THROTTLE_BYTES_PER_SECOND'),
+      maxRetries: getEnvNumber('LXFETCH_MAX_RETRIES'),
+      retryDelayMs: getEnvNumber('LXFETCH_RETRY_DELAY_MS'),
+      filenamePattern: getEnv('LXFETCH_FILENAME_PATTERN'),
+      embedCover: getEnvBoolean('LXFETCH_EMBED_COVER'),
+      embedLyric: getEnvBoolean('LXFETCH_EMBED_LYRIC'),
+      writeTags: getEnvBoolean('LXFETCH_WRITE_TAGS'),
+      verifyMetadata: getEnvBoolean('LXFETCH_VERIFY_METADATA'),
+      cacheMetadata: getEnvBoolean('LXFETCH_CACHE_METADATA'),
+      metadataCacheMaxAgeDays: getEnvNumber('LXFETCH_METADATA_CACHE_MAX_AGE_DAYS'),
+      metadataCacheMaxBytes: getEnvNumber('LXFETCH_METADATA_CACHE_MAX_BYTES'),
+      skipExisting: getEnvBoolean('LXFETCH_SKIP_EXISTING'),
+      upgradeExisting: getEnvBoolean('LXFETCH_UPGRADE_EXISTING'),
+    }),
+    subscription: compactObject({
+      maxTasksPerRun: getEnvNumber('LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN'),
+      taskCreateDelayMs: getEnvNumber('LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS'),
+    }),
+  }
+}
+
 export const loadConfig = (): AppConfig => {
   const configPath = path.join(process.cwd(), 'config.js')
-  if (!fs.existsSync(configPath)) return defaults
-  delete localRequire.cache[localRequire.resolve(configPath)]
-  return mergeConfig(defaults, localRequire(configPath))
+  const fileConfig = fs.existsSync(configPath)
+    ? (() => {
+        delete localRequire.cache[localRequire.resolve(configPath)]
+        return localRequire(configPath)
+      })()
+    : {}
+  return mergeConfig(mergeConfig(defaults, fileConfig), getEnvConfig())
 }
 
 export const appConfig = loadConfig()

@@ -31,6 +31,8 @@ npm install
 npm run dev
 ```
 
+项目 `.npmrc` 默认使用 `https://registry.npmmirror.com` 安装 npm 依赖。
+
 生产：
 
 ```bash
@@ -45,6 +47,68 @@ http://127.0.0.1:9528
 ```
 
 LXFetch 不会安装后台服务。关闭 `npm start` 进程后，订阅调度和下载任务都会停止。
+
+Docker：
+
+```bash
+docker build -t lxfetch .
+mkdir -p data
+docker run --rm -p 9528:9528 -v "$PWD/data:/app/data" lxfetch
+```
+
+Dockerfile 默认使用 `docker.1ms.run/node:24-bookworm-slim` 作为 Node 基础镜像，并使用 `https://registry.npmmirror.com` 安装 npm 依赖。
+
+Docker Compose：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Docker 运行时数据挂载到宿主机 `./data`，包括音源、订阅、任务、元数据缓存和下载文件。停止容器后，订阅调度和下载任务也会停止。
+
+Docker Compose 会自动读取项目目录下的 `.env`。复制 `.env.example` 后只改 `.env`，不需要直接改 `docker-compose.yml`。
+
+发布到 GitHub Container Registry 后可以这样运行：
+
+```bash
+mkdir -p data
+docker pull ghcr.io/yzfh-ty/lxfetch:latest
+docker run --rm -p 9528:9528 -v "$PWD/data:/app/data" ghcr.io/yzfh-ty/lxfetch:latest
+```
+
+`.github/workflows/docker.yml` 会在推送 `main`、推送 `v*` tag，或者在 GitHub Actions 手动运行时构建并发布镜像。默认发布到：
+
+```text
+ghcr.io/yzfh-ty/lxfetch
+```
+
+标签规则：
+
+- `main` 分支发布 `latest`。
+- `v0.1.0` 这类 tag 发布 `0.1.0` 和 `0.1`。
+- 每次构建都会发布一个 `sha-*` 标签。
+
+如需使用自定义配置：
+
+```bash
+cp config.example.js config.js
+docker run --rm -p 9528:9528 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/config.js:/app/config.js:ro" \
+  lxfetch
+```
+
+使用已发布镜像时，把命令末尾的 `lxfetch` 替换成 `ghcr.io/yzfh-ty/lxfetch:latest`。
+
+如果宿主机挂载的 `data` 目录不可写，可以按当前用户运行容器：
+
+```bash
+docker run --rm -p 9528:9528 \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/data:/app/data" \
+  lxfetch
+```
 
 ## 3. 配置
 
@@ -98,6 +162,8 @@ module.exports = {
 
 说明：
 
+- 环境变量优先级高于 `config.js`，Docker 部署推荐使用 `.env` 配置。
+- Docker Compose 会自动读取 `.env`，可以从 `.env.example` 复制。
 - `auth.adminPassword` 为空时不要求管理员密码。
 - `source.allowUnsafeVM` 默认关闭。只有确实需要兼容旧音源时才开启。
 - `netease.cookie` 是可选的网易云音乐完整 Cookie。配置后，`wy` 平台下载会先用 Cookie 直解，失败后再回退到自定义音源。也可以用环境变量 `NETEASE_COOKIE`、`NETEASE_COOKIES` 或 `WY_COOKIE`。
@@ -112,6 +178,37 @@ module.exports = {
 - `download.upgradeExisting` 会在本地文件音质低于当前歌曲数据明确报告的最高音质时继续下载升级版本，旧文件会保留。
 - `subscription.maxTasksPerRun` 是每次订阅更新最多创建的任务数，`0` 表示不限制本次入队数量。设置为正数时会分批入队，例如 200 首榜单设置为 `50` 会每次最多创建 50 个任务，后续定时更新或手动立即更新继续创建下一批。
 - `subscription.taskCreateDelayMs` 是订阅更新时每创建一个下载任务后的等待时间。
+
+支持的环境变量：
+
+```text
+LXFETCH_HOST
+LXFETCH_PORT
+LXFETCH_ADMIN_PASSWORD
+LXFETCH_ALLOW_UNSAFE_VM
+NETEASE_COOKIE
+NETEASE_COOKIES
+WY_COOKIE
+NETEASE_COOKIE_FILE
+WY_COOKIE_FILE
+LXFETCH_DOWNLOAD_DIR
+LXFETCH_MAX_CONCURRENT
+LXFETCH_THROTTLE_BYTES_PER_SECOND
+LXFETCH_MAX_RETRIES
+LXFETCH_RETRY_DELAY_MS
+LXFETCH_FILENAME_PATTERN
+LXFETCH_EMBED_COVER
+LXFETCH_EMBED_LYRIC
+LXFETCH_WRITE_TAGS
+LXFETCH_VERIFY_METADATA
+LXFETCH_CACHE_METADATA
+LXFETCH_METADATA_CACHE_MAX_AGE_DAYS
+LXFETCH_METADATA_CACHE_MAX_BYTES
+LXFETCH_SKIP_EXISTING
+LXFETCH_UPGRADE_EXISTING
+LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN
+LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS
+```
 
 ## 4. 当前功能范围
 

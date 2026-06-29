@@ -28,6 +28,8 @@ LXFetch does not ship with built-in resolver sources. Import an LX/lxserver-comp
 npm install
 ```
 
+The project `.npmrc` uses `https://registry.npmmirror.com` for npm installs.
+
 ## Development
 
 ```bash
@@ -48,6 +50,66 @@ npm start
 ```
 
 LXFetch only runs while this process is running. It does not install or keep a background service.
+
+## Docker
+
+The Dockerfile defaults to the `docker.1ms.run` Node image mirror and `https://registry.npmmirror.com` for npm packages.
+
+Build and run:
+
+```bash
+docker build -t lxfetch .
+mkdir -p data
+docker run --rm -p 9528:9528 -v "$PWD/data:/app/data" lxfetch
+```
+
+Open:
+
+```text
+http://127.0.0.1:9528
+```
+
+Use Docker Compose:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Docker stores runtime data in the mounted `./data` directory, including custom sources, subscriptions, tasks, metadata cache, and downloaded files. Stop the container to stop LXFetch.
+
+Use the GitHub Container Registry image after it is published:
+
+```bash
+mkdir -p data
+docker pull ghcr.io/yzfh-ty/lxfetch:latest
+docker run --rm -p 9528:9528 -v "$PWD/data:/app/data" ghcr.io/yzfh-ty/lxfetch:latest
+```
+
+Docker images are published by `.github/workflows/docker.yml` when `main` is pushed, when a `v*` tag is pushed, or when the workflow is run manually from GitHub Actions. The image tags include `latest` for `main`, semantic version tags for Git tags such as `v0.1.0`, and a `sha-*` tag for each build.
+
+Docker Compose reads `.env` from the project directory. Copy `.env.example` to `.env` and edit that file instead of changing `docker-compose.yml`.
+
+To use a custom config:
+
+```bash
+cp config.example.js config.js
+docker run --rm -p 9528:9528 \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/config.js:/app/config.js:ro" \
+  lxfetch
+```
+
+For the published image, replace `lxfetch` with `ghcr.io/yzfh-ty/lxfetch:latest`.
+
+If the mounted `data` directory is not writable on your host, run the container as your current user:
+
+```bash
+docker run --rm -p 9528:9528 \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/data:/app/data" \
+  lxfetch
+```
 
 ## Configuration
 
@@ -101,6 +163,8 @@ module.exports = {
 
 Notes:
 
+- Environment variables override `config.js`. This is the recommended way to configure Docker deployments.
+- Docker Compose reads `.env` automatically. Start from `.env.example`.
 - `maxConcurrent` controls active download tasks. The default is `1`.
 - `netease.cookie` sets an optional full NetEase Cloud Music cookie. When set, NetEase (`wy`) downloads try cookie-based resolving first and fall back to custom sources if it fails. You can also set `NETEASE_COOKIE`, `NETEASE_COOKIES`, or `WY_COOKIE`.
 - `netease.cookieFile` is used when `netease.cookie` is empty. The default is `../Netease_url/cookie.txt`.
@@ -114,6 +178,37 @@ Notes:
 - `taskCreateDelayMs` delays task creation during subscription updates.
 - `filenamePattern` supports `{name}`, `{singer}`, `{album}`, `{source}`, `{quality}`, and `{id}`.
 - The web UI `Configuration` page is read-only. Edit `config.js` and restart LXFetch to change server-side options.
+
+Environment variables:
+
+```text
+LXFETCH_HOST
+LXFETCH_PORT
+LXFETCH_ADMIN_PASSWORD
+LXFETCH_ALLOW_UNSAFE_VM
+NETEASE_COOKIE
+NETEASE_COOKIES
+WY_COOKIE
+NETEASE_COOKIE_FILE
+WY_COOKIE_FILE
+LXFETCH_DOWNLOAD_DIR
+LXFETCH_MAX_CONCURRENT
+LXFETCH_THROTTLE_BYTES_PER_SECOND
+LXFETCH_MAX_RETRIES
+LXFETCH_RETRY_DELAY_MS
+LXFETCH_FILENAME_PATTERN
+LXFETCH_EMBED_COVER
+LXFETCH_EMBED_LYRIC
+LXFETCH_WRITE_TAGS
+LXFETCH_VERIFY_METADATA
+LXFETCH_CACHE_METADATA
+LXFETCH_METADATA_CACHE_MAX_AGE_DAYS
+LXFETCH_METADATA_CACHE_MAX_BYTES
+LXFETCH_SKIP_EXISTING
+LXFETCH_UPGRADE_EXISTING
+LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN
+LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS
+```
 
 ## Quality Strategy
 
