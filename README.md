@@ -1,8 +1,10 @@
 # LXFetch
 
-LXFetch is a self-hosted web music downloader built around LX-compatible custom sources. It focuses on high-quality local downloads, playlist and leaderboard browsing, subscription updates, cover and lyric collection, audio tag writing, and post-download metadata verification.
+[简体中文](README.zh-CN.md) | English
 
-LXFetch does not ship with built-in resolver sources. Import an LX/lxserver-compatible custom source before downloading.
+LXFetch is a self-hosted web music downloader built around LX Music Desktop-compatible custom sources. It focuses on high-quality local downloads, playlist and leaderboard browsing, subscription updates, cover and lyric collection, audio tag writing, and post-download metadata verification.
+
+LXFetch does not ship with built-in resolver sources. Import an LX Music Desktop-compatible custom source before downloading.
 
 ## Features
 
@@ -20,7 +22,7 @@ LXFetch does not ship with built-in resolver sources. Import an LX/lxserver-comp
 ## Requirements
 
 - Node.js 18 or newer.
-- At least one LX/lxserver-compatible custom source script.
+- At least one LX Music Desktop-compatible custom source script.
 
 ## Install
 
@@ -177,40 +179,41 @@ Notes:
 
 Environment variables:
 
-```text
-LXFETCH_HOST
-LXFETCH_PORT
-LXFETCH_ADMIN_PASSWORD
-LXFETCH_ALLOW_UNSAFE_VM
-NETEASE_COOKIE
-NETEASE_COOKIES
-WY_COOKIE
-NETEASE_COOKIE_FILE
-WY_COOKIE_FILE
-LXFETCH_DOWNLOAD_DIR
-LXFETCH_MAX_CONCURRENT
-LXFETCH_THROTTLE_BYTES_PER_SECOND
-LXFETCH_MAX_RETRIES
-LXFETCH_RETRY_DELAY_MS
-LXFETCH_FILENAME_PATTERN
-LXFETCH_EMBED_COVER
-LXFETCH_EMBED_LYRIC
-LXFETCH_WRITE_TAGS
-LXFETCH_VERIFY_METADATA
-LXFETCH_CACHE_METADATA
-LXFETCH_METADATA_CACHE_MAX_AGE_DAYS
-LXFETCH_METADATA_CACHE_MAX_BYTES
-LXFETCH_SKIP_EXISTING
-LXFETCH_UPGRADE_EXISTING
-LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN
-LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS
-```
+| Variable | Default | Description |
+| --- | --- | --- |
+| `NODE_ENV` | `production` | Node.js runtime mode. |
+| `LXFETCH_HOST` | `0.0.0.0` | HTTP server bind address. Keep `0.0.0.0` in Docker. |
+| `LXFETCH_PORT` | `9528` | HTTP server port. Docker Compose uses the same value for host and container port. |
+| `LXFETCH_ADMIN_PASSWORD` | empty | Optional admin password for source management and other write actions. Empty disables password checks. |
+| `LXFETCH_ALLOW_UNSAFE_VM` | `false` | Enables unsafe custom source compatibility mode. Keep disabled unless an old source requires it. |
+| `NETEASE_COOKIE` | empty | Optional full NetEase Cloud Music cookie. Used before custom sources for `wy` downloads. |
+| `NETEASE_COOKIES` | empty | Alternate NetEase cookie environment variable. |
+| `WY_COOKIE` | empty | Alternate NetEase cookie environment variable. |
+| `NETEASE_COOKIE_FILE` | empty | Path to a NetEase cookie file. Overrides the default config value when set. |
+| `WY_COOKIE_FILE` | empty | Alternate NetEase cookie file path variable. |
+| `LXFETCH_DOWNLOAD_DIR` | `./data/downloads` | Directory for downloaded audio files. Keep it under `/app/data` or mounted storage in Docker. |
+| `LXFETCH_MAX_CONCURRENT` | `1` | Maximum number of active download tasks. |
+| `LXFETCH_THROTTLE_BYTES_PER_SECOND` | `0` | Per-task bandwidth limit in bytes per second. `0` means unlimited. |
+| `LXFETCH_MAX_RETRIES` | `2` | Retry count for interrupted, timed-out, temporary, or incomplete download failures. |
+| `LXFETCH_RETRY_DELAY_MS` | `2000` | Delay between download retries in milliseconds. |
+| `LXFETCH_FILENAME_PATTERN` | `{name} - {singer}` | Download filename pattern. Supports `{name}`, `{singer}`, `{album}`, `{source}`, `{quality}`, and `{id}`. |
+| `LXFETCH_EMBED_COVER` | `true` | Embed cover art into downloaded audio files. |
+| `LXFETCH_EMBED_LYRIC` | `true` | Embed lyrics into downloaded audio files. |
+| `LXFETCH_WRITE_TAGS` | `true` | Write title, artist, album, cover, and lyric tags. |
+| `LXFETCH_VERIFY_METADATA` | `true` | Verify downloaded files and metadata after tagging. |
+| `LXFETCH_CACHE_METADATA` | `true` | Cache fetched covers and lyrics under `data/cache/metadata`. |
+| `LXFETCH_METADATA_CACHE_MAX_AGE_DAYS` | `90` | Maximum metadata cache age in days. |
+| `LXFETCH_METADATA_CACHE_MAX_BYTES` | `209715200` | Maximum metadata cache size in bytes. |
+| `LXFETCH_SKIP_EXISTING` | `true` | Skip creating a new task when the same song already exists locally. |
+| `LXFETCH_UPGRADE_EXISTING` | `true` | Allow downloading a better-quality copy when the existing local file is lower quality. |
+| `LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN` | `0` | Maximum new tasks per subscription update. `0` queues all newly discovered songs. |
+| `LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS` | `1500` | Delay between creating subscription download tasks in milliseconds. |
 
 ## Quality Strategy
 
 Downloads always start from `Highest Available`. The frontend does not send a fixed quality.
 
-LXFetch reuses lxserver/lx-music-desktop's quality order:
+LXFetch follows the LX Music Desktop custom source quality order, which lxserver also follows:
 
 ```text
 flac24bit -> flac -> wav -> ape -> 320k -> 192k -> 128k
@@ -266,6 +269,17 @@ data/
 ```
 
 `data/` is local runtime state and should not be committed.
+
+## References
+
+LXFetch is an independent project. Its primary compatibility target is the LX Music Desktop custom source protocol, and parts of its backend behavior were implemented with reference to related compatible projects:
+
+- [LX Music Desktop](https://github.com/lyswhut/lx-music-desktop): the original compatibility target for the custom source protocol, platform music data formats, quality order, and desktop download behavior.
+- [lxserver](https://github.com/XCQ0607/lxserver): a server-side project that is also compatible with LX Music Desktop custom sources; its custom source loading, LX-compatible user API behavior, music SDK integration patterns, playlist/leaderboard access, resolver flow, metadata handling, and quality fallback behavior were used as backend references.
+- [lx-music-source](https://github.com/pdone/lx-music-source): public LX Music Desktop custom source examples used for import and resolver compatibility testing.
+- [Netease_url](https://github.com/Suxiaoqinx/Netease_url): NetEase Cloud Music cookie-based URL resolving was used as a reference for the optional `wy` cookie resolver path.
+
+LXFetch is not affiliated with these projects. Respect the licenses and usage rules of the referenced projects and any custom sources you import.
 
 ## Useful Scripts
 
