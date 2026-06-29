@@ -25,6 +25,8 @@ cd lxfetch
 curl -LO https://raw.githubusercontent.com/yzfh-ty/LXFetch/main/docker-compose.yml
 curl -Lo .env.example https://raw.githubusercontent.com/yzfh-ty/LXFetch/main/.env.example
 cp .env.example .env
+sed -i "s/^PUID=.*/PUID=$(id -u)/" .env
+sed -i "s/^PGID=.*/PGID=$(id -g)/" .env
 ```
 
 Start LXFetch:
@@ -41,6 +43,7 @@ http://127.0.0.1:9528
 ```
 
 Runtime data is stored in `./data`, including custom sources, tasks, subscriptions, metadata cache, and downloaded files.
+The container runs as `PUID:PGID` from `.env` so it can write to the mounted `./data` directory.
 
 To update:
 
@@ -64,6 +67,8 @@ Important variables:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | Docker image used by `docker-compose.yml`. Set a version tag such as `ghcr.io/yzfh-ty/lxfetch:0.1.0` to pin a release. |
+| `PUID` | `1000` | Host user ID used by the container to write `./data`. Set it with `id -u`. |
+| `PGID` | `1000` | Host group ID used by the container to write `./data`. Set it with `id -g`. |
 | `LXFETCH_PORT` | `9528` | Web UI port. |
 | `LXFETCH_ADMIN_PASSWORD` | empty | Optional admin password. Empty disables password checks. |
 | `LXFETCH_DOWNLOAD_DIR` | `./data/downloads` | Download directory inside the container. Keep it under `/app/data` or `./data` persistence. |
@@ -75,7 +80,6 @@ Important variables:
 | `LXFETCH_WRITE_TAGS` | `true` | Write audio tags. |
 | `LXFETCH_VERIFY_METADATA` | `true` | Verify downloaded files and tags. |
 | `NETEASE_COOKIE` | empty | Optional NetEase Cloud Music cookie for `wy` resolving. |
-| `NETEASE_COOKIE_FILE` | empty | Optional NetEase cookie file path. |
 | `LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN` | `0` | Maximum new tasks per subscription update. `0` queues all discovered songs. |
 | `LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS` | `1500` | Delay between subscription-created tasks in milliseconds. |
 

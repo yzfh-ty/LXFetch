@@ -162,7 +162,7 @@ module.exports = {
 - Docker Compose 会自动读取 `.env`，可以从 `.env.example` 复制。
 - `auth.adminPassword` 为空时不要求管理员密码。
 - `source.allowUnsafeVM` 默认关闭。只有确实需要兼容旧音源时才开启。
-- `netease.cookie` 是可选的网易云音乐完整 Cookie。配置后，`wy` 平台下载会先用 Cookie 直解，失败后再回退到自定义音源。也可以用环境变量 `NETEASE_COOKIE`、`NETEASE_COOKIES` 或 `WY_COOKIE`。
+- `netease.cookie` 是可选的网易云音乐完整 Cookie。配置后，`wy` 平台下载会先用 Cookie 直解，失败后再回退到自定义音源。也可以用环境变量 `NETEASE_COOKIE`。
 - `netease.cookieFile` 会在 `netease.cookie` 为空时读取，默认是兄弟目录的 `../Netease_url/cookie.txt`。
 - `download.maxConcurrent` 是同时下载任务数，默认 `1`。
 - `download.throttleBytesPerSecond` 是单个下载任务的带宽限制，单位是 bytes/s，`0` 表示不限速。
@@ -183,10 +183,7 @@ LXFETCH_PORT
 LXFETCH_ADMIN_PASSWORD
 LXFETCH_ALLOW_UNSAFE_VM
 NETEASE_COOKIE
-NETEASE_COOKIES
-WY_COOKIE
 NETEASE_COOKIE_FILE
-WY_COOKIE_FILE
 LXFETCH_DOWNLOAD_DIR
 LXFETCH_MAX_CONCURRENT
 LXFETCH_THROTTLE_BYTES_PER_SECOND

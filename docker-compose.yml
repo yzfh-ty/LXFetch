@@ -3,6 +3,7 @@ services:
     image: "${LXFETCH_IMAGE:-ghcr.io/yzfh-ty/lxfetch:latest}"
     container_name: lxfetch
     init: true
+    user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "${LXFETCH_PORT:-9528}:${LXFETCH_PORT:-9528}"
     volumes:
@@ -14,10 +15,6 @@ services:
       LXFETCH_ADMIN_PASSWORD: "${LXFETCH_ADMIN_PASSWORD:-}"
       LXFETCH_ALLOW_UNSAFE_VM: "${LXFETCH_ALLOW_UNSAFE_VM:-}"
       NETEASE_COOKIE: "${NETEASE_COOKIE:-}"
-      NETEASE_COOKIES: "${NETEASE_COOKIES:-}"
-      WY_COOKIE: "${WY_COOKIE:-}"
-      NETEASE_COOKIE_FILE: "${NETEASE_COOKIE_FILE:-}"
-      WY_COOKIE_FILE: "${WY_COOKIE_FILE:-}"
       LXFETCH_DOWNLOAD_DIR: "${LXFETCH_DOWNLOAD_DIR:-}"
       LXFETCH_MAX_CONCURRENT: "${LXFETCH_MAX_CONCURRENT:-}"
       LXFETCH_THROTTLE_BYTES_PER_SECOND: "${LXFETCH_THROTTLE_BYTES_PER_SECOND:-}"

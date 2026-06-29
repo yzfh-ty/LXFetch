@@ -11,7 +11,7 @@ module.exports = {
   },
   netease: {
     // Optional full NetEase Cloud Music cookie. When set, wy downloads try this first.
-    // You can also set NETEASE_COOKIE, NETEASE_COOKIES, or WY_COOKIE in the environment.
+    // You can also set NETEASE_COOKIE in the environment.
     cookie: '',
     // Used when cookie is empty. The default reads the sibling Netease_url project cookie file.
     cookieFile: '../Netease_url/cookie.txt',

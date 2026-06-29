@@ -25,6 +25,8 @@ cd lxfetch
 curl -LO https://raw.githubusercontent.com/yzfh-ty/LXFetch/main/docker-compose.yml
 curl -Lo .env.example https://raw.githubusercontent.com/yzfh-ty/LXFetch/main/.env.example
 cp .env.example .env
+sed -i "s/^PUID=.*/PUID=$(id -u)/" .env
+sed -i "s/^PGID=.*/PGID=$(id -g)/" .env
 ```
 
 启动：
@@ -41,6 +43,7 @@ http://127.0.0.1:9528
 ```
 
 运行数据保存在 `./data`，包括音源、任务、订阅、元数据缓存和下载文件。
+容器会按 `.env` 里的 `PUID:PGID` 运行，以便正常写入挂载的 `./data` 目录。
 
 更新：
 
@@ -64,6 +67,8 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | `docker-compose.yml` 使用的镜像。可改成 `ghcr.io/yzfh-ty/lxfetch:0.1.0` 固定版本。 |
+| `PUID` | `1000` | 容器写入 `./data` 使用的宿主机用户 ID，可用 `id -u` 获取。 |
+| `PGID` | `1000` | 容器写入 `./data` 使用的宿主机用户组 ID，可用 `id -g` 获取。 |
 | `LXFETCH_PORT` | `9528` | Web 页面端口。 |
 | `LXFETCH_ADMIN_PASSWORD` | 空 | 可选管理员密码。为空时不校验密码。 |
 | `LXFETCH_DOWNLOAD_DIR` | `./data/downloads` | 容器内下载目录。建议保持在 `/app/data` 或 `./data` 持久化目录下。 |
@@ -75,7 +80,6 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 | `LXFETCH_WRITE_TAGS` | `true` | 写入音频标签。 |
 | `LXFETCH_VERIFY_METADATA` | `true` | 检查下载文件和标签。 |
 | `NETEASE_COOKIE` | 空 | 可选网易云音乐 Cookie，用于 `wy` 解析。 |
-| `NETEASE_COOKIE_FILE` | 空 | 可选网易云 Cookie 文件路径。 |
 | `LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN` | `0` | 每次订阅更新最多创建的新任务数，`0` 表示全部入队。 |
 | `LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS` | `1500` | 订阅创建下载任务的间隔，单位毫秒。 |
 
