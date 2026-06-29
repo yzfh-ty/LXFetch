@@ -130,6 +130,17 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
           maxTasksPerRun: appConfig.subscription.maxTasksPerRun,
           taskCreateDelayMs: appConfig.subscription.taskCreateDelayMs,
         },
+        navidrome: {
+          enabled: appConfig.navidrome.enabled,
+          playlistSyncEnabled: appConfig.navidrome.playlistSyncEnabled,
+          playlistDir: appConfig.navidrome.playlistDir,
+          playlistPathMode: appConfig.navidrome.playlistPathMode,
+          playlistExportIntervalMinutes: appConfig.navidrome.playlistExportIntervalMinutes,
+          scanAfterExport: appConfig.navidrome.scanAfterExport,
+          baseUrlConfigured: !!appConfig.navidrome.baseUrl,
+          usernameConfigured: !!appConfig.navidrome.username,
+          passwordConfigured: !!appConfig.navidrome.password,
+        },
         netease: {
           cookieResolverEnabled: isNeteaseCookieResolverEnabled(),
         },
@@ -324,12 +335,29 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return methodNotAllowed(res)
     }
 
+    if (pathname === '/api/subscriptions/navidrome-sync') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const results = await subscriptionManager.syncAllNavidromePlaylists()
+      sendJson(res, 200, { success: true, results })
+      return
+    }
+
     const subscriptionRunMatch = pathname.match(/^\/api\/subscriptions\/([^/]+)\/run$/)
     if (subscriptionRunMatch) {
       if (req.method !== 'POST') return methodNotAllowed(res)
       if (!requireAdmin(req, res)) return
       const subscription = await subscriptionManager.run(subscriptionRunMatch[1])
       sendJson(res, 200, { success: true, subscription })
+      return
+    }
+
+    const subscriptionNavidromeSyncMatch = pathname.match(/^\/api\/subscriptions\/([^/]+)\/navidrome-sync$/)
+    if (subscriptionNavidromeSyncMatch) {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const result = await subscriptionManager.syncNavidromePlaylist(subscriptionNavidromeSyncMatch[1])
+      sendJson(res, 200, { success: true, result })
       return
     }
 

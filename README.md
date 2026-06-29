@@ -83,8 +83,36 @@ Important variables:
 | `NETEASE_COOKIE` | empty | Optional NetEase Cloud Music cookie for `wy` resolving. |
 | `LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN` | `0` | Maximum new tasks per subscription update. `0` queues all discovered songs. |
 | `LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS` | `1500` | Delay between subscription-created tasks in milliseconds. |
+| `LXFETCH_NAVIDROME_ENABLED` | `false` | Enable Navidrome integration. |
+| `LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED` | `false` | Export subscriptions as Navidrome-scannable public `.nsp` smart playlists. |
+| `LXFETCH_NAVIDROME_PLAYLIST_DIR` | `/app/downloads/_playlists` | `.nsp` smart playlist output directory. Navidrome must be able to read this directory. |
+| `LXFETCH_NAVIDROME_PLAYLIST_PATH_MODE` | `relative` | Write `filepath` rules relative to the Navidrome music folder. Use `absolute` only when both containers share the same absolute paths. |
+| `LXFETCH_NAVIDROME_PLAYLIST_EXPORT_INTERVAL_MINUTES` | `5` | Periodic refresh interval for generated smart playlists. |
+| `LXFETCH_NAVIDROME_SCAN_AFTER_EXPORT` | `false` | Call the Navidrome/Subsonic scan endpoint after playlist changes. |
+| `LXFETCH_NAVIDROME_BASE_URL` | empty | Navidrome URL, for example `http://navidrome:4533`. Required for automatic scan. |
+| `LXFETCH_NAVIDROME_USERNAME` | empty | Navidrome username. Required for automatic scan. |
+| `LXFETCH_NAVIDROME_PASSWORD` | empty | Navidrome password. Required for automatic scan. |
 
 See `.env.example` for the full list.
+
+## Navidrome Playlist Sync
+
+When `LXFETCH_NAVIDROME_ENABLED=true` and `LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED=true`, LXFetch exports subscribed playlists and leaderboards as Navidrome `.nsp` smart playlists with `"public": true`, so they are visible to all Navidrome users. If there is no name conflict, the Navidrome playlist uses the original title. If multiple subscriptions share the same title, LXFetch appends a platform or short ID suffix to distinguish them.
+
+Navidrome imports generated `.nsp` files during a library scan. Smart playlist track counts may refresh when the playlist is opened in Navidrome.
+
+Navidrome should mount the same downloads directory and read playlists from `_playlists`:
+
+```yaml
+navidrome:
+  image: deluan/navidrome:latest
+  volumes:
+    - ./downloads:/music:ro
+    - ./navidrome-data:/data
+  environment:
+    ND_MUSICFOLDER: /music
+    ND_PLAYLISTSPATH: _playlists
+```
 
 ## Local Development
 

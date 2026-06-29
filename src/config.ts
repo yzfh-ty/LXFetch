@@ -39,6 +39,19 @@ export interface AppConfig {
     maxTasksPerRun: number
     taskCreateDelayMs: number
   }
+  navidrome: {
+    enabled: boolean
+    playlistSyncEnabled: boolean
+    playlistDir: string
+    playlistPathMode: 'relative' | 'absolute'
+    playlistExportIntervalMinutes: number
+    scanAfterExport: boolean
+    baseUrl: string
+    username: string
+    password: string
+    clientName: string
+    apiVersion: string
+  }
 }
 
 const defaults: AppConfig = {
@@ -77,6 +90,19 @@ const defaults: AppConfig = {
     maxTasksPerRun: 0,
     taskCreateDelayMs: 1500,
   },
+  navidrome: {
+    enabled: false,
+    playlistSyncEnabled: false,
+    playlistDir: './data/downloads/_playlists',
+    playlistPathMode: 'relative',
+    playlistExportIntervalMinutes: 5,
+    scanAfterExport: false,
+    baseUrl: '',
+    username: '',
+    password: '',
+    clientName: 'lxfetch',
+    apiVersion: '1.16.1',
+  },
 }
 
 const localRequire = createRequire(__filename)
@@ -88,6 +114,7 @@ const mergeConfig = (base: AppConfig, override: any): AppConfig => ({
   netease: { ...base.netease, ...(override.netease || {}) },
   download: { ...base.download, ...(override.download || {}) },
   subscription: { ...base.subscription, ...(override.subscription || {}) },
+  navidrome: { ...base.navidrome, ...(override.navidrome || {}) },
 })
 
 const getEnv = (...names: string[]) => {
@@ -154,8 +181,30 @@ const getEnvConfig = () => {
       maxTasksPerRun: getEnvNumber('LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN'),
       taskCreateDelayMs: getEnvNumber('LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS'),
     }),
+    navidrome: compactObject({
+      enabled: getEnvBoolean('LXFETCH_NAVIDROME_ENABLED'),
+      playlistSyncEnabled: getEnvBoolean('LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED'),
+      playlistDir: getEnv('LXFETCH_NAVIDROME_PLAYLIST_DIR'),
+      playlistPathMode: getEnv('LXFETCH_NAVIDROME_PLAYLIST_PATH_MODE'),
+      playlistExportIntervalMinutes: getEnvNumber('LXFETCH_NAVIDROME_PLAYLIST_EXPORT_INTERVAL_MINUTES'),
+      scanAfterExport: getEnvBoolean('LXFETCH_NAVIDROME_SCAN_AFTER_EXPORT'),
+      baseUrl: getEnv('LXFETCH_NAVIDROME_BASE_URL'),
+      username: getEnv('LXFETCH_NAVIDROME_USERNAME'),
+      password: getEnv('LXFETCH_NAVIDROME_PASSWORD'),
+      clientName: getEnv('LXFETCH_NAVIDROME_CLIENT_NAME'),
+      apiVersion: getEnv('LXFETCH_NAVIDROME_API_VERSION'),
+    }),
   }
 }
+
+const normalizeConfig = (config: AppConfig): AppConfig => ({
+  ...config,
+  navidrome: {
+    ...config.navidrome,
+    playlistPathMode: config.navidrome.playlistPathMode === 'absolute' ? 'absolute' : 'relative',
+    playlistExportIntervalMinutes: Math.max(1, Math.round(Number(config.navidrome.playlistExportIntervalMinutes || 5))),
+  },
+})
 
 export const loadConfig = (): AppConfig => {
   const configPath = path.join(process.cwd(), 'config.js')
@@ -165,7 +214,7 @@ export const loadConfig = (): AppConfig => {
         return localRequire(configPath)
       })()
     : {}
-  return mergeConfig(mergeConfig(defaults, fileConfig), getEnvConfig())
+  return normalizeConfig(mergeConfig(mergeConfig(defaults, fileConfig), getEnvConfig()))
 }
 
 export const appConfig = loadConfig()
@@ -178,6 +227,7 @@ export const subscriptionsFile = path.join(dataDir, 'subscriptions.json')
 export const downloadsDir = path.resolve(process.cwd(), appConfig.download.dir)
 export const downloadIndexFile = path.join(downloadsDir, 'downloads_index.json')
 export const metadataCacheDir = path.join(dataDir, 'cache', 'metadata')
+export const navidromePlaylistDir = path.resolve(process.cwd(), appConfig.navidrome.playlistDir)
 
 export const ensureRuntimeDirs = () => {
   for (const dir of [dataDir, sourcesDir, scriptsDir, downloadsDir, metadataCacheDir]) {

@@ -5,6 +5,12 @@ import { getDownloadedItemBySongInfo } from './downloadIndex'
 import { getBestReportedQuality, getLeaderboardList, getSongListDetail } from './musicResolver'
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from './jsonStore'
 import { getSongKey } from './songIdentity'
+import {
+  exportSubscriptionPlaylist,
+  exportSubscriptionPlaylists,
+  removeSubscriptionPlaylist,
+  type PlaylistExportResult,
+} from './navidromePlaylistExporter'
 
 type SubscriptionType = 'songList' | 'leaderboard'
 
@@ -35,6 +41,12 @@ export interface Subscription {
   lastCreatedCount: number
   lastSkippedCount: number
   lastInvalidCount: number
+  lastPlaylistSyncedAt: number
+  lastPlaylistFile: string
+  lastPlaylistDisplayName: string
+  lastPlaylistDownloadedCount: number
+  lastPlaylistMissingCount: number
+  lastPlaylistError: string
   createdAt: number
   updatedAt: number
 }
@@ -52,6 +64,7 @@ const CHECK_INTERVAL_MS = 60 * 1000
 const MAX_FETCH_PAGES = 20
 const MAX_FETCH_SONGS = 500
 const MAX_STORED_KEYS = 5000
+const PLAYLIST_SYNC_DEBOUNCE_MS = 30 * 1000
 
 const sleep = async (ms: number) => {
   if (ms <= 0) return
@@ -88,6 +101,8 @@ class SubscriptionManager {
   private subscriptions: Subscription[] = []
   private runningIds = new Set<string>()
   private timer: NodeJS.Timeout | null = null
+  private playlistTimer: NodeJS.Timeout | null = null
+  private playlistSyncTimer: NodeJS.Timeout | null = null
 
   constructor() {
     this.subscriptions = this.load()
@@ -116,6 +131,12 @@ class SubscriptionManager {
       lastCreatedCount: Number(item.lastCreatedCount || 0),
       lastSkippedCount: Number(item.lastSkippedCount || 0),
       lastInvalidCount: Number(item.lastInvalidCount || 0),
+      lastPlaylistSyncedAt: Number(item.lastPlaylistSyncedAt || 0),
+      lastPlaylistFile: item.lastPlaylistFile || '',
+      lastPlaylistDisplayName: item.lastPlaylistDisplayName || '',
+      lastPlaylistDownloadedCount: Number(item.lastPlaylistDownloadedCount || 0),
+      lastPlaylistMissingCount: Number(item.lastPlaylistMissingCount || 0),
+      lastPlaylistError: item.lastPlaylistError || '',
     }))
   }
 
@@ -191,6 +212,12 @@ class SubscriptionManager {
       lastCreatedCount: 0,
       lastSkippedCount: 0,
       lastInvalidCount: 0,
+      lastPlaylistSyncedAt: 0,
+      lastPlaylistFile: '',
+      lastPlaylistDisplayName: '',
+      lastPlaylistDownloadedCount: 0,
+      lastPlaylistMissingCount: 0,
+      lastPlaylistError: '',
       createdAt: now,
       updatedAt: now,
     }
@@ -211,6 +238,7 @@ class SubscriptionManager {
   delete(id: string) {
     const before = this.subscriptions.length
     this.subscriptions = this.subscriptions.filter(item => item.id !== id)
+    removeSubscriptionPlaylist(id)
     this.save()
     return this.subscriptions.length !== before
   }
@@ -240,12 +268,35 @@ class SubscriptionManager {
     setTimeout(() => {
       void this.runDueSubscriptions().catch(() => {})
     }, 2000).unref?.()
+    this.startPlaylistScheduler()
   }
 
   stopScheduler() {
     if (!this.timer) return
     clearInterval(this.timer)
     this.timer = null
+    if (this.playlistTimer) {
+      clearInterval(this.playlistTimer)
+      this.playlistTimer = null
+    }
+    if (this.playlistSyncTimer) {
+      clearTimeout(this.playlistSyncTimer)
+      this.playlistSyncTimer = null
+    }
+  }
+
+  private startPlaylistScheduler() {
+    if (this.playlistTimer || !appConfig.navidrome.enabled || !appConfig.navidrome.playlistSyncEnabled) return
+    const intervalMs = Math.max(1, appConfig.navidrome.playlistExportIntervalMinutes || 5) * 60 * 1000
+    this.playlistTimer = setInterval(() => {
+      void this.syncAllNavidromePlaylists().catch(error => {
+        console.warn('[lxfetch] navidrome playlist sync failed:', error.message)
+      })
+    }, intervalMs)
+    this.playlistTimer.unref?.()
+    setTimeout(() => {
+      void this.syncAllNavidromePlaylists().catch(() => {})
+    }, 10000).unref?.()
   }
 
   async runDueSubscriptions() {
@@ -304,6 +355,65 @@ class SubscriptionManager {
     return songs
   }
 
+  async getCurrentSongs(id: string) {
+    const subscription = this.get(id)
+    if (!subscription) throw new Error('Subscription not found')
+    return this.fetchSongs(subscription)
+  }
+
+  private applyPlaylistResult(subscription: Subscription, result: PlaylistExportResult) {
+    if (!result.enabled) return
+    subscription.lastPlaylistSyncedAt = Date.now()
+    subscription.lastPlaylistFile = result.playlistFile || subscription.lastPlaylistFile || ''
+    subscription.lastPlaylistDisplayName = result.displayName || subscription.lastPlaylistDisplayName || ''
+    subscription.lastPlaylistDownloadedCount = Number(result.downloaded || 0)
+    subscription.lastPlaylistMissingCount = Number(result.missing || 0)
+    subscription.lastPlaylistError = result.error || result.scan?.error || ''
+    this.touch(subscription)
+  }
+
+  private applyPlaylistError(subscription: Subscription, error: any) {
+    subscription.lastPlaylistSyncedAt = Date.now()
+    subscription.lastPlaylistError = error.message || String(error)
+    this.touch(subscription)
+  }
+
+  async syncNavidromePlaylist(id: string, songs?: any[]) {
+    const subscription = this.get(id)
+    if (!subscription) throw new Error('Subscription not found')
+    try {
+      const currentSongs = songs || await this.fetchSongs(subscription)
+      const result = await exportSubscriptionPlaylist(subscription, currentSongs, this.subscriptions)
+      this.applyPlaylistResult(subscription, result)
+      return result
+    } catch (error: any) {
+      this.applyPlaylistError(subscription, error)
+      throw error
+    }
+  }
+
+  async syncAllNavidromePlaylists() {
+    const results = await exportSubscriptionPlaylists(this.subscriptions, subscription => this.fetchSongs(subscription))
+    for (const result of results) {
+      const subscription = this.get(result.subscriptionId)
+      if (!subscription) continue
+      this.applyPlaylistResult(subscription, result)
+    }
+    return results
+  }
+
+  scheduleNavidromePlaylistSync() {
+    if (!appConfig.navidrome.enabled || !appConfig.navidrome.playlistSyncEnabled) return
+    if (this.playlistSyncTimer) return
+    this.playlistSyncTimer = setTimeout(() => {
+      this.playlistSyncTimer = null
+      void this.syncAllNavidromePlaylists().catch(error => {
+        console.warn('[lxfetch] navidrome playlist sync failed:', error.message)
+      })
+    }, PLAYLIST_SYNC_DEBOUNCE_MS)
+    this.playlistSyncTimer.unref?.()
+  }
+
   async run(id: string) {
     const subscription = this.get(id)
     if (!subscription) throw new Error('Subscription not found')
@@ -356,6 +466,9 @@ class SubscriptionManager {
       subscription.lastUpdatedAt = Date.now()
       subscription.lastError = ''
       this.touch(subscription)
+      void this.syncNavidromePlaylist(subscription.id, songs).catch(error => {
+        console.warn('[lxfetch] navidrome playlist sync failed:', error.message)
+      })
       return subscription
     } catch (error: any) {
       subscription.lastRunStatus = 'failed'

@@ -83,8 +83,36 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 | `NETEASE_COOKIE` | 空 | 可选网易云音乐 Cookie，用于 `wy` 解析。 |
 | `LXFETCH_SUBSCRIPTION_MAX_TASKS_PER_RUN` | `0` | 每次订阅更新最多创建的新任务数，`0` 表示全部入队。 |
 | `LXFETCH_SUBSCRIPTION_TASK_CREATE_DELAY_MS` | `1500` | 订阅创建下载任务的间隔，单位毫秒。 |
+| `LXFETCH_NAVIDROME_ENABLED` | `false` | 启用 Navidrome 集成。 |
+| `LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED` | `false` | 将订阅自动导出为 Navidrome 可扫描的公开 `.nsp` 智能歌单。 |
+| `LXFETCH_NAVIDROME_PLAYLIST_DIR` | `/app/downloads/_playlists` | `.nsp` 智能歌单输出目录。Navidrome 需要能读取该目录。 |
+| `LXFETCH_NAVIDROME_PLAYLIST_PATH_MODE` | `relative` | 将 `filepath` 规则写成相对 Navidrome 音乐目录的路径。只有两个容器共享完全相同绝对路径时才用 `absolute`。 |
+| `LXFETCH_NAVIDROME_PLAYLIST_EXPORT_INTERVAL_MINUTES` | `5` | 生成智能歌单的周期刷新间隔，单位分钟。 |
+| `LXFETCH_NAVIDROME_SCAN_AFTER_EXPORT` | `false` | 歌单变化后调用 Navidrome/Subsonic 扫描接口。 |
+| `LXFETCH_NAVIDROME_BASE_URL` | 空 | Navidrome 地址，例如 `http://navidrome:4533`。启用自动扫描时需要。 |
+| `LXFETCH_NAVIDROME_USERNAME` | 空 | Navidrome 用户名。启用自动扫描时需要。 |
+| `LXFETCH_NAVIDROME_PASSWORD` | 空 | Navidrome 密码。启用自动扫描时需要。 |
 
 完整变量见 `.env.example`。
+
+## Navidrome 歌单同步
+
+启用 `LXFETCH_NAVIDROME_ENABLED=true` 和 `LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED=true` 后，LXFetch 会把订阅的歌单/榜单导出为 Navidrome `.nsp` 智能歌单，并在文件里写入 `"public": true`，方便所有 Navidrome 用户可见。无同名冲突时 Navidrome 歌单名使用原标题；多个订阅同名时会自动追加平台或短 ID 后缀区分。
+
+Navidrome 会在媒体库扫描时导入生成的 `.nsp` 文件；智能歌单的曲目数量可能在 Navidrome 中打开歌单时刷新。
+
+Navidrome 需要挂载同一个下载目录，并把歌单目录指向 `_playlists`：
+
+```yaml
+navidrome:
+  image: deluan/navidrome:latest
+  volumes:
+    - ./downloads:/music:ro
+    - ./navidrome-data:/data
+  environment:
+    ND_MUSICFOLDER: /music
+    ND_PLAYLISTSPATH: _playlists
+```
 
 ## 本地开发
 

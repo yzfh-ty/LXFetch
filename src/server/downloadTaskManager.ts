@@ -778,6 +778,11 @@ class DownloadTaskManager {
       task.error = ''
       task.errorCategory = ''
       this.touch(task)
+      void import('./subscriptionManager.js').then(({ subscriptionManager }) => {
+        subscriptionManager.scheduleNavidromePlaylistSync()
+      }).catch(error => {
+        console.warn('[lxfetch] navidrome playlist sync failed:', error.message)
+      })
     } catch (error: any) {
       if (isStopRequested(task, controller)) return
       task.status = 'failed'

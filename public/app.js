@@ -139,6 +139,7 @@ const renderConfigSummary = () => {
   }
   const download = cfg.download || {};
   const subscription = cfg.subscription || {};
+  const navidrome = cfg.navidrome || {};
   const netease = cfg.netease || {};
   const platformRows = (cfg.platforms || []).map(platform => ([
     `${platform.name} (${platform.id})`,
@@ -175,6 +176,20 @@ const renderConfigSummary = () => {
         ${renderConfigTable([
           ['每轮入队上限', subscription.maxTasksPerRun],
           ['入队间隔 ms', subscription.taskCreateDelayMs],
+        ])}
+      </div>
+      <div>
+        <h3>Navidrome</h3>
+        ${renderConfigTable([
+          ['集成启用', navidrome.enabled],
+          ['歌单同步', navidrome.playlistSyncEnabled],
+          ['歌单目录', navidrome.playlistDir || '-'],
+          ['路径模式', navidrome.playlistPathMode || '-'],
+          ['同步间隔分钟', navidrome.playlistExportIntervalMinutes],
+          ['导出后扫描', navidrome.scanAfterExport],
+          ['服务地址已配置', navidrome.baseUrlConfigured],
+          ['用户已配置', navidrome.usernameConfigured],
+          ['密码已配置', navidrome.passwordConfigured],
         ])}
       </div>
       <div>
@@ -573,6 +588,9 @@ const loadSubscriptions = async () => {
 
 const renderSubscriptions = () => {
   const el = $('subscriptions-list');
+  const navidromeEnabled = !!(state.config?.navidrome?.enabled && state.config?.navidrome?.playlistSyncEnabled);
+  const syncAllButton = $('sync-navidrome-playlists');
+  if (syncAllButton) syncAllButton.hidden = !navidromeEnabled;
   if (!state.subscriptions.length) {
     el.innerHTML = '<div class="meta">暂无订阅</div>';
     return;
@@ -594,10 +612,21 @@ const renderSubscriptions = () => {
           ${sub.lastInvalidCount ? `<span class="badge warn">无效 ${Number(sub.lastInvalidCount || 0)}</span>` : ''}
           <span class="badge">已记录 ${sub.downloadedKeys?.length || 0}</span>
         </div>
+        ${navidromeEnabled ? `
+          <div class="badges">
+            <span class="badge ${sub.lastPlaylistError ? 'fail' : (sub.lastPlaylistSyncedAt ? 'ok' : '')}">Navidrome ${sub.lastPlaylistSyncedAt ? '已同步' : '未同步'}</span>
+            <span class="badge">歌单 ${escapeHtml(sub.lastPlaylistDisplayName || sub.title || sub.targetId)}</span>
+            <span class="badge">已入歌单 ${Number(sub.lastPlaylistDownloadedCount || 0)}</span>
+            <span class="badge">未下载 ${Number(sub.lastPlaylistMissingCount || 0)}</span>
+          </div>
+          <div class="meta">智能歌单文件：${escapeHtml(sub.lastPlaylistFile || '-')} · 上次同步：${formatTime(sub.lastPlaylistSyncedAt)}</div>
+          ${sub.lastPlaylistError ? `<div class="meta">${escapeHtml(sub.lastPlaylistError)}</div>` : ''}
+        ` : ''}
         <div class="meta">上次检查：${formatTime(sub.lastCheckedAt)} · 上次更新：${formatTime(sub.lastUpdatedAt)}</div>
         ${sub.lastError ? `<div class="meta">${escapeHtml(sub.lastError)}</div>` : ''}
         <div class="row-actions">
           <button type="button" onclick="runSubscription('${sub.id}')">立即更新</button>
+          ${navidromeEnabled ? `<button type="button" onclick="syncNavidromePlaylist('${sub.id}')">同步歌单</button>` : ''}
           <button type="button" onclick="toggleSubscription('${sub.id}', ${!sub.enabled})">${sub.enabled ? '暂停' : '启用'}</button>
           <button type="button" onclick="resetSubscription('${sub.id}')">重置记录</button>
           <button type="button" class="danger" onclick="deleteSubscription('${sub.id}')">删除</button>
@@ -605,6 +634,30 @@ const renderSubscriptions = () => {
       </div>
     `;
   }).join('');
+};
+
+window.syncNavidromePlaylist = async (id) => {
+  try {
+    const data = await api(`/api/subscriptions/${encodeURIComponent(id)}/navidrome-sync`, { method: 'POST' });
+    const result = data.result || {};
+    toast(`已同步 ${Number(result.downloaded || 0)} 首，未下载 ${Number(result.missing || 0)} 首`);
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+const syncAllNavidromePlaylists = async () => {
+  try {
+    const data = await api('/api/subscriptions/navidrome-sync', { method: 'POST' });
+    const results = data.results || [];
+    const downloaded = results.reduce((sum, item) => sum + Number(item.downloaded || 0), 0);
+    const missing = results.reduce((sum, item) => sum + Number(item.missing || 0), 0);
+    toast(`已同步 ${results.length} 个歌单，已下载 ${downloaded} 首，未下载 ${missing} 首`);
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
 };
 
 const createSubscription = async (payload) => {
@@ -1252,6 +1305,7 @@ const bindEvents = () => {
     }
   });
   $('refresh-subscriptions').addEventListener('click', () => loadSubscriptions().catch(error => toast(error.message)));
+  $('sync-navidrome-playlists').addEventListener('click', () => syncAllNavidromePlaylists());
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
   $('task-status-filter').addEventListener('change', event => {
     state.taskStatusFilter = event.target.value;

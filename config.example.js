@@ -48,4 +48,22 @@ module.exports = {
     // Delay between creating subscription download tasks.
     taskCreateDelayMs: 1500,
   },
+  navidrome: {
+    // When enabled with playlistSyncEnabled, LXFetch exports subscribed playlists as public Navidrome .nsp smart playlists.
+    enabled: false,
+    playlistSyncEnabled: false,
+    // For the default local layout, Navidrome should mount the same downloads directory and read this subdirectory as playlists.
+    playlistDir: './data/downloads/_playlists',
+    // Use relative file paths unless the LXFetch and Navidrome containers share identical absolute music paths.
+    playlistPathMode: 'relative',
+    // Periodically refresh generated smart playlists so songs downloaded after a subscription run are added later.
+    playlistExportIntervalMinutes: 5,
+    // Optional: call Navidrome's Subsonic startScan endpoint after a generated playlist changes.
+    scanAfterExport: false,
+    baseUrl: '',
+    username: '',
+    password: '',
+    clientName: 'lxfetch',
+    apiVersion: '1.16.1',
+  },
 }
