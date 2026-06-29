@@ -1,16 +1,12 @@
 services:
   lxfetch:
-    build:
-      context: .
-    image: lxfetch:latest
+    image: "${LXFETCH_IMAGE:-ghcr.io/yzfh-ty/lxfetch:latest}"
     container_name: lxfetch
     init: true
     ports:
       - "${LXFETCH_PORT:-9528}:${LXFETCH_PORT:-9528}"
     volumes:
       - ./data:/app/data
-      # Enable this after creating config.js from config.example.js.
-      # - ./config.js:/app/config.js:ro
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       LXFETCH_HOST: "${LXFETCH_HOST:-0.0.0.0}"
