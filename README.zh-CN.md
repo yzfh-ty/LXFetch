@@ -27,6 +27,8 @@ curl -Lo .env.example https://raw.githubusercontent.com/yzfh-ty/LXFetch/main/.en
 cp .env.example .env
 sed -i "s/^PUID=.*/PUID=$(id -u)/" .env
 sed -i "s/^PGID=.*/PGID=$(id -g)/" .env
+mkdir -p data downloads
+sudo chown -R "$(id -u):$(id -g)" data downloads
 ```
 
 启动：
@@ -42,8 +44,8 @@ docker compose up -d
 http://127.0.0.1:9528
 ```
 
-运行数据保存在 `./data`，包括音源、任务、订阅、元数据缓存和下载文件。
-容器会按 `.env` 里的 `PUID:PGID` 运行，以便正常写入挂载的 `./data` 目录。
+运行状态保存在 `./data`，下载的音频文件保存在 `./downloads`。
+容器会按 `.env` 里的 `PUID:PGID` 运行，以便正常写入这两个挂载目录。
 
 更新：
 
@@ -67,11 +69,11 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | `docker-compose.yml` 使用的镜像。可改成 `ghcr.io/yzfh-ty/lxfetch:0.1.0` 固定版本。 |
-| `PUID` | `1000` | 容器写入 `./data` 使用的宿主机用户 ID，可用 `id -u` 获取。 |
-| `PGID` | `1000` | 容器写入 `./data` 使用的宿主机用户组 ID，可用 `id -g` 获取。 |
+| `PUID` | `1000` | 容器写入挂载目录使用的宿主机用户 ID，可用 `id -u` 获取。 |
+| `PGID` | `1000` | 容器写入挂载目录使用的宿主机用户组 ID，可用 `id -g` 获取。 |
 | `LXFETCH_PORT` | `9528` | Web 页面端口。 |
 | `LXFETCH_ADMIN_PASSWORD` | 空 | 可选管理员密码。为空时不校验密码。 |
-| `LXFETCH_DOWNLOAD_DIR` | `./data/downloads` | 容器内下载目录。建议保持在 `/app/data` 或 `./data` 持久化目录下。 |
+| `LXFETCH_DOWNLOAD_DIR` | `/app/downloads` | 容器内下载目录，`docker-compose.yml` 会映射到宿主机 `./downloads`。 |
 | `LXFETCH_MAX_CONCURRENT` | `1` | 最大同时下载任务数。 |
 | `LXFETCH_THROTTLE_BYTES_PER_SECOND` | `0` | 单任务限速，单位 bytes/s。`0` 表示不限速。 |
 | `LXFETCH_FILENAME_PATTERN` | `{name} - {singer}` | 文件命名模板，支持 `{name}`、`{singer}`、`{album}`、`{source}`、`{quality}`、`{id}`。 |

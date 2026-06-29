@@ -8,6 +8,7 @@ services:
       - "${LXFETCH_PORT:-9528}:${LXFETCH_PORT:-9528}"
     volumes:
       - ./data:/app/data
+      - ./downloads:/app/downloads
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       LXFETCH_HOST: "${LXFETCH_HOST:-0.0.0.0}"
@@ -15,7 +16,7 @@ services:
       LXFETCH_ADMIN_PASSWORD: "${LXFETCH_ADMIN_PASSWORD:-}"
       LXFETCH_ALLOW_UNSAFE_VM: "${LXFETCH_ALLOW_UNSAFE_VM:-}"
       NETEASE_COOKIE: "${NETEASE_COOKIE:-}"
-      LXFETCH_DOWNLOAD_DIR: "${LXFETCH_DOWNLOAD_DIR:-}"
+      LXFETCH_DOWNLOAD_DIR: "${LXFETCH_DOWNLOAD_DIR:-/app/downloads}"
       LXFETCH_MAX_CONCURRENT: "${LXFETCH_MAX_CONCURRENT:-}"
       LXFETCH_THROTTLE_BYTES_PER_SECOND: "${LXFETCH_THROTTLE_BYTES_PER_SECOND:-}"
       LXFETCH_MAX_RETRIES: "${LXFETCH_MAX_RETRIES:-}"

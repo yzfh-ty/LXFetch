@@ -27,6 +27,8 @@ curl -Lo .env.example https://raw.githubusercontent.com/yzfh-ty/LXFetch/main/.en
 cp .env.example .env
 sed -i "s/^PUID=.*/PUID=$(id -u)/" .env
 sed -i "s/^PGID=.*/PGID=$(id -g)/" .env
+mkdir -p data downloads
+sudo chown -R "$(id -u):$(id -g)" data downloads
 ```
 
 Start LXFetch:
@@ -42,8 +44,8 @@ Open:
 http://127.0.0.1:9528
 ```
 
-Runtime data is stored in `./data`, including custom sources, tasks, subscriptions, metadata cache, and downloaded files.
-The container runs as `PUID:PGID` from `.env` so it can write to the mounted `./data` directory.
+Runtime state is stored in `./data`. Downloaded audio files are stored in `./downloads`.
+The container runs as `PUID:PGID` from `.env` so it can write to both mounted directories.
 
 To update:
 
@@ -67,11 +69,11 @@ Important variables:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | Docker image used by `docker-compose.yml`. Set a version tag such as `ghcr.io/yzfh-ty/lxfetch:0.1.0` to pin a release. |
-| `PUID` | `1000` | Host user ID used by the container to write `./data`. Set it with `id -u`. |
-| `PGID` | `1000` | Host group ID used by the container to write `./data`. Set it with `id -g`. |
+| `PUID` | `1000` | Host user ID used by the container to write mounted directories. Set it with `id -u`. |
+| `PGID` | `1000` | Host group ID used by the container to write mounted directories. Set it with `id -g`. |
 | `LXFETCH_PORT` | `9528` | Web UI port. |
 | `LXFETCH_ADMIN_PASSWORD` | empty | Optional admin password. Empty disables password checks. |
-| `LXFETCH_DOWNLOAD_DIR` | `./data/downloads` | Download directory inside the container. Keep it under `/app/data` or `./data` persistence. |
+| `LXFETCH_DOWNLOAD_DIR` | `/app/downloads` | Download directory inside the container. `docker-compose.yml` maps it to host `./downloads`. |
 | `LXFETCH_MAX_CONCURRENT` | `1` | Maximum active download tasks. |
 | `LXFETCH_THROTTLE_BYTES_PER_SECOND` | `0` | Per-task speed limit in bytes/s. `0` means unlimited. |
 | `LXFETCH_FILENAME_PATTERN` | `{name} - {singer}` | Filename pattern. Supports `{name}`, `{singer}`, `{album}`, `{source}`, `{quality}`, and `{id}`. |
