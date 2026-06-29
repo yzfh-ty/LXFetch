@@ -21,11 +21,12 @@ COPY --chown=node:node config.example.js ./
 COPY --chown=node:node public ./public
 COPY --chown=node:node --from=build /app/server ./server
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
+COPY docker-entrypoint.js /usr/local/bin/docker-entrypoint.js
 
-RUN mkdir -p /app/data && chown -R node:node /app/data
+RUN mkdir -p /app/data /app/downloads && chmod +x /usr/local/bin/docker-entrypoint.js
 
-USER node
 EXPOSE 9528
-VOLUME ["/app/data"]
+VOLUME ["/app/data", "/app/downloads"]
 
+ENTRYPOINT ["docker-entrypoint.js"]
 CMD ["node", "server/index.js"]

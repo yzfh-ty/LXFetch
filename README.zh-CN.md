@@ -28,7 +28,6 @@ cp .env.example .env
 sed -i "s/^PUID=.*/PUID=$(id -u)/" .env
 sed -i "s/^PGID=.*/PGID=$(id -g)/" .env
 mkdir -p data downloads
-sudo chown -R "$(id -u):$(id -g)" data downloads
 ```
 
 启动：
@@ -45,7 +44,7 @@ http://127.0.0.1:9528
 ```
 
 运行状态保存在 `./data`，下载的音频文件保存在 `./downloads`。
-容器会按 `.env` 里的 `PUID:PGID` 运行，以便正常写入这两个挂载目录。
+容器启动时会自动修正挂载目录归属，然后按 `.env` 里的 `PUID:PGID` 运行应用。
 
 更新：
 
@@ -68,7 +67,7 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | `docker-compose.yml` 使用的镜像。可改成 `ghcr.io/yzfh-ty/lxfetch:0.1.0` 固定版本。 |
+| `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | `docker-compose.yml` 使用的镜像。可改成 `ghcr.io/yzfh-ty/lxfetch:0.1.2` 固定版本。 |
 | `PUID` | `1000` | 容器写入挂载目录使用的宿主机用户 ID，可用 `id -u` 获取。 |
 | `PGID` | `1000` | 容器写入挂载目录使用的宿主机用户组 ID，可用 `id -g` 获取。 |
 | `LXFETCH_PORT` | `9528` | Web 页面端口。 |
@@ -107,7 +106,7 @@ Docker 镜像只在推送 `v*` 标签时发布到 GitHub Container Registry。
 
 ```text
 ghcr.io/yzfh-ty/lxfetch:latest
-ghcr.io/yzfh-ty/lxfetch:0.1.0
+ghcr.io/yzfh-ty/lxfetch:0.1.2
 ghcr.io/yzfh-ty/lxfetch:0.1
 ```
 

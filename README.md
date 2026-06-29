@@ -28,7 +28,6 @@ cp .env.example .env
 sed -i "s/^PUID=.*/PUID=$(id -u)/" .env
 sed -i "s/^PGID=.*/PGID=$(id -g)/" .env
 mkdir -p data downloads
-sudo chown -R "$(id -u):$(id -g)" data downloads
 ```
 
 Start LXFetch:
@@ -45,7 +44,7 @@ http://127.0.0.1:9528
 ```
 
 Runtime state is stored in `./data`. Downloaded audio files are stored in `./downloads`.
-The container runs as `PUID:PGID` from `.env` so it can write to both mounted directories.
+The container fixes mounted directory ownership on startup and then runs the app as `PUID:PGID` from `.env`.
 
 To update:
 
@@ -68,7 +67,7 @@ Important variables:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | Docker image used by `docker-compose.yml`. Set a version tag such as `ghcr.io/yzfh-ty/lxfetch:0.1.0` to pin a release. |
+| `LXFETCH_IMAGE` | `ghcr.io/yzfh-ty/lxfetch:latest` | Docker image used by `docker-compose.yml`. Set a version tag such as `ghcr.io/yzfh-ty/lxfetch:0.1.2` to pin a release. |
 | `PUID` | `1000` | Host user ID used by the container to write mounted directories. Set it with `id -u`. |
 | `PGID` | `1000` | Host group ID used by the container to write mounted directories. Set it with `id -g`. |
 | `LXFETCH_PORT` | `9528` | Web UI port. |
@@ -107,7 +106,7 @@ Docker images are published to GitHub Container Registry only when a `v*` tag is
 
 ```text
 ghcr.io/yzfh-ty/lxfetch:latest
-ghcr.io/yzfh-ty/lxfetch:0.1.0
+ghcr.io/yzfh-ty/lxfetch:0.1.2
 ghcr.io/yzfh-ty/lxfetch:0.1
 ```
 
