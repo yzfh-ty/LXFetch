@@ -52,8 +52,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            NODE_IMAGE=docker.1ms.run/node:24-bookworm-slim
-            NPM_REGISTRY=https://registry.npmmirror.com
           cache-from: type=gha
           cache-to: type=gha,mode=max

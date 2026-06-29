@@ -1,23 +1,18 @@
-ARG NODE_IMAGE=docker.1ms.run/node:24-bookworm-slim
-ARG NPM_REGISTRY=https://registry.npmmirror.com
-
-FROM ${NODE_IMAGE} AS deps
-ARG NPM_REGISTRY
+FROM node:24-bookworm-slim AS deps
 WORKDIR /app
-COPY package.json package-lock.json .npmrc ./
-RUN npm ci --registry="$NPM_REGISTRY" --replace-registry-host=always
+COPY package.json package-lock.json ./
+RUN npm ci
 
-FROM ${NODE_IMAGE} AS build
-ARG NPM_REGISTRY
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json package-lock.json .npmrc tsconfig.json ./
+COPY package.json package-lock.json tsconfig.json ./
 COPY src ./src
 COPY public ./public
 COPY config.example.js ./
-RUN npm run build && npm prune --omit=dev --registry="$NPM_REGISTRY" --replace-registry-host=always
+RUN npm run build && npm prune --omit=dev
 
-FROM ${NODE_IMAGE} AS runtime
+FROM node:24-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 

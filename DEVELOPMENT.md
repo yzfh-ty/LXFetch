@@ -31,8 +31,6 @@ npm install
 npm run dev
 ```
 
-项目 `.npmrc` 默认使用 `https://registry.npmmirror.com` 安装 npm 依赖。
-
 生产：
 
 ```bash
@@ -55,8 +53,6 @@ docker build -t lxfetch .
 mkdir -p data
 docker run --rm -p 9528:9528 -v "$PWD/data:/app/data" lxfetch
 ```
-
-Dockerfile 默认使用 `docker.1ms.run/node:24-bookworm-slim` 作为 Node 基础镜像，并使用 `https://registry.npmmirror.com` 安装 npm 依赖。
 
 Docker Compose：
 

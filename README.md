@@ -28,8 +28,6 @@ LXFetch does not ship with built-in resolver sources. Import an LX/lxserver-comp
 npm install
 ```
 
-The project `.npmrc` uses `https://registry.npmmirror.com` for npm installs.
-
 ## Development
 
 ```bash
@@ -52,8 +50,6 @@ npm start
 LXFetch only runs while this process is running. It does not install or keep a background service.
 
 ## Docker
-
-The Dockerfile defaults to the `docker.1ms.run` Node image mirror and `https://registry.npmmirror.com` for npm packages.
 
 Build and run:
 

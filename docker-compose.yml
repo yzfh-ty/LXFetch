@@ -2,9 +2,6 @@ services:
   lxfetch:
     build:
       context: .
-      args:
-        NODE_IMAGE: docker.1ms.run/node:24-bookworm-slim
-        NPM_REGISTRY: https://registry.npmmirror.com
     image: lxfetch:latest
     container_name: lxfetch
     init: true
