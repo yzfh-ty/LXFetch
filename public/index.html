@@ -207,6 +207,22 @@
             <button id="clear-failed-tasks" type="button">清理失败/停止</button>
           </div>
         </div>
+        <div class="task-toolbar">
+          <label for="task-status-filter">状态</label>
+          <select id="task-status-filter">
+            <option value="all">全部任务</option>
+            <option value="active">活动中</option>
+            <option value="waiting">等待</option>
+            <option value="resolving">解析</option>
+            <option value="downloading">下载</option>
+            <option value="metadata_fetching">元数据</option>
+            <option value="tagging">写标签</option>
+            <option value="verifying">检查</option>
+            <option value="finished">完成</option>
+            <option value="failed">失败</option>
+            <option value="stopped">停止</option>
+          </select>
+        </div>
         <div id="tasks-summary" class="meta summary-line">总数 0 · 活动 0 · 速度 0 B/s</div>
         <div id="tasks-list" class="list task-list"></div>
       </section>

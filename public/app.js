@@ -1,6 +1,7 @@
 const ADMIN_STORAGE_KEY = 'lxfetch_admin';
 const LEGACY_ADMIN_STORAGE_KEY = 'lxdownload_admin';
 const SUBSCRIPTION_INTERVAL_STORAGE_KEY = 'lxfetch_subscription_interval';
+const TASK_ACTIVE_STATUSES = ['waiting', 'resolving', 'downloading', 'metadata_fetching', 'tagging', 'verifying'];
 
 const QUALITY_LABELS = {
   best: '最高可用',
@@ -21,6 +22,7 @@ const state = {
   sources: [],
   tasks: [],
   taskStats: null,
+  taskStatusFilter: 'all',
   files: [],
   subscriptions: [],
   subscriptionIntervalMinutes: Number(localStorage.getItem(SUBSCRIPTION_INTERVAL_STORAGE_KEY) || 360),
@@ -358,6 +360,14 @@ const statusName = (status) => ({
   stopped: '停止',
 }[status] || status);
 
+const getFilteredTasks = () => {
+  if (state.taskStatusFilter === 'all') return state.tasks;
+  if (state.taskStatusFilter === 'active') {
+    return state.tasks.filter(task => TASK_ACTIVE_STATUSES.includes(task.status));
+  }
+  return state.tasks.filter(task => task.status === state.taskStatusFilter);
+};
+
 const errorCategoryName = (category) => ({
   resolve: '解析',
   quality: '音质',
@@ -372,12 +382,14 @@ const errorCategoryName = (category) => ({
 }[category] || category);
 
 const renderTasks = () => {
+  const filteredTasks = getFilteredTasks();
   const summary = $('tasks-summary');
   if (summary) {
     const stats = state.taskStats || {};
     const byStatus = stats.byStatus || {};
     const parts = [
       `总数 ${Number(stats.total || 0)}`,
+      `当前 ${filteredTasks.length}`,
       `活动 ${Number(stats.active || 0)}`,
       `速度 ${formatSize(stats.speed || 0)}/s`,
       `等待 ${Number(byStatus.waiting || 0)}`,
@@ -391,7 +403,11 @@ const renderTasks = () => {
     el.innerHTML = '<div class="meta">暂无任务</div>';
     return;
   }
-  el.innerHTML = state.tasks.map(task => {
+  if (!filteredTasks.length) {
+    el.innerHTML = '<div class="meta">当前筛选下暂无任务</div>';
+    return;
+  }
+  el.innerHTML = filteredTasks.map(task => {
     const statusClass = task.status === 'finished' ? 'ok' : (task.status === 'failed' ? 'fail' : (task.status === 'stopped' ? 'warn' : ''));
     const qualityText = task.requestedQuality && task.requestedQuality !== task.quality
       ? `${qualityLabel(task.requestedQuality)} -> ${qualityLabel(task.quality)}`
@@ -443,7 +459,7 @@ window.stopTask = async (id) => {
 window.retryTask = async (id) => {
   try {
     await api(`/api/download/tasks/${encodeURIComponent(id)}/retry`, { method: 'POST' });
-    toast('已创建重试任务');
+    toast('已重新加入队列');
     await loadTasks();
   } catch (error) {
     toast(error.message);
@@ -467,7 +483,8 @@ const retryFailedTasks = async () => {
   try {
     const result = await api('/api/download/tasks/retry-failed', { method: 'POST' });
     await loadTasks();
-    toast(`已创建 ${result.created || result.count || 0} 个重试任务，复用 ${result.reused || 0} 个`);
+    const skippedText = result.skipped ? `，跳过 ${result.skipped} 个` : '';
+    toast(`已重新加入队列 ${result.retried || result.count || 0} 个失败任务${skippedText}`);
   } catch (error) {
     toast(error.message);
   }
@@ -1236,6 +1253,10 @@ const bindEvents = () => {
   });
   $('refresh-subscriptions').addEventListener('click', () => loadSubscriptions().catch(error => toast(error.message)));
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
+  $('task-status-filter').addEventListener('change', event => {
+    state.taskStatusFilter = event.target.value;
+    renderTasks();
+  });
   $('retry-failed-tasks').addEventListener('click', () => retryFailedTasks());
   $('stop-active-tasks').addEventListener('click', () => stopActiveTasks());
   $('clear-finished-tasks').addEventListener('click', () => clearTasks(['finished'], '已清理完成'));

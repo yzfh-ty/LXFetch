@@ -70,6 +70,7 @@ const PROGRESS_SAVE_INTERVAL_MS = 5000
 const activeControllers = new Map<string, AbortController>()
 const TERMINAL_STATUSES = new Set(['finished', 'failed', 'stopped'])
 const ABORTABLE_STATUSES = new Set(['waiting', 'resolving', 'downloading'])
+const RETRYABLE_STATUSES = new Set(['failed', 'stopped'])
 
 const ensureTasksFile = () => {
   ensureJsonFile(tasksFile, [])
@@ -252,10 +253,29 @@ class DownloadTaskManager {
     this.saveTasks(deferred)
   }
 
+  private cleanupTempFile(task: DownloadTask) {
+    if (!task.tempFilename) return
+    try {
+      const tempPath = path.join(downloadsDir, task.tempFilename)
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+    } catch {}
+    task.tempFilename = ''
+  }
+
   private findActiveDuplicate(songInfo: any) {
     const key = getSongKey(songInfo)
     if (!key) return undefined
     return this.tasks.find(task => !TERMINAL_STATUSES.has(task.status) && getSongKey(task.songInfo) === key)
+  }
+
+  private findOtherActiveDuplicate(task: DownloadTask) {
+    const key = getSongKey(task.songInfo)
+    if (!key) return undefined
+    return this.tasks.find(item => (
+      item.id !== task.id
+      && !TERMINAL_STATUSES.has(item.status)
+      && getSongKey(item.songInfo) === key
+    ))
   }
 
   private createExistingDownloadTask(
@@ -471,31 +491,92 @@ class DownloadTaskManager {
     return task
   }
 
+  private resetTaskForRetry(task: DownloadTask) {
+    if (!RETRYABLE_STATUSES.has(task.status)) {
+      throw new Error('无效的任务状态，只有失败或停止的任务可以重试')
+    }
+    if (activeControllers.has(task.id)) {
+      throw new Error('任务正在停止，请稍后重试')
+    }
+    if (this.findOtherActiveDuplicate(task)) {
+      throw new Error('已存在相同歌曲的活动任务')
+    }
+
+    this.cleanupTempFile(task)
+
+    const existing = appConfig.download.skipExisting ? getDownloadedItemBySongInfo(task.songInfo) : undefined
+    const existingDecision = existing ? this.shouldSkipExisting(task.songInfo, existing) : undefined
+
+    task.quality = DEFAULT_DOWNLOAD_QUALITY
+    task.requestedQuality = undefined
+    task.allowQualityFallback = true
+    task.url = ''
+    task.sourceName = ''
+    task.attempts = []
+    task.progress = 0
+    task.received = 0
+    task.total = 0
+    task.speed = 0
+    task.filename = ''
+    task.error = ''
+    task.errorCategory = ''
+    task.retryCount = 0
+    task.maxRetries = Math.max(0, Number(appConfig.download.maxRetries || 0))
+    task.existingFilename = existing?.filename || ''
+    task.existingQuality = existingDecision?.existingQuality || ''
+    task.upgradeTargetQuality = existingDecision?.targetQuality || ''
+    task.metadata = {
+      lyricFetched: false,
+      coverFetched: false,
+      tagsWritten: false,
+      verified: false,
+      verifyErrors: [],
+      verifyWarnings: [],
+      metadataErrors: [],
+    }
+
+    if (existing && existingDecision?.skip) {
+      this.finishWithExistingDownload(
+        task,
+        existing,
+        `已存在 ${existing.filename}，跳过重复下载`,
+      )
+      return task
+    }
+
+    task.status = 'waiting'
+    task.updatedAt = Date.now()
+    this.saveTasks()
+    this.processQueue()
+    return task
+  }
+
   retryTask(id: string) {
-    const oldTask = this.getTask(id)
-    if (!oldTask) throw new Error('Task not found')
-    return this.createTask({
-      songInfo: oldTask.songInfo,
-      source: oldTask.source,
-      options: oldTask.options,
-    })
+    const task = this.getTask(id)
+    if (!task) throw new Error('Task not found')
+    return this.resetTaskForRetry(task)
   }
 
   retryFailedTasks() {
     const failedTasks = this.tasks.filter(task => task.status === 'failed')
-    const beforeIds = new Set(this.tasks.map(task => task.id))
-    const retried = failedTasks.map(task => this.createTask({
-      songInfo: task.songInfo,
-      source: task.source,
-      options: task.options,
-    }))
-    const created = retried.filter(task => !beforeIds.has(task.id)).length
+    const retried: DownloadTask[] = []
+    const skipped: Array<{ id: string, error: string }> = []
+    for (const task of failedTasks) {
+      try {
+        retried.push(this.resetTaskForRetry(task))
+      } catch (error: any) {
+        skipped.push({ id: task.id, error: error.message || String(error) })
+      }
+    }
     return {
       requested: failedTasks.length,
-      count: created,
-      created,
-      reused: retried.length - created,
+      count: retried.length,
+      retried: retried.length,
+      skipped: skipped.length,
+      created: 0,
+      reused: retried.length,
       tasks: retried,
+      skippedTasks: skipped,
     }
   }
 
@@ -530,13 +611,7 @@ class DownloadTaskManager {
     task.error = '任务已停止'
     task.errorCategory = ''
     task.speed = 0
-    if (task.tempFilename) {
-      try {
-        const tempPath = path.join(downloadsDir, task.tempFilename)
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
-      } catch {}
-      task.tempFilename = ''
-    }
+    this.cleanupTempFile(task)
     this.touch(task)
     return task
   }
@@ -710,13 +785,7 @@ class DownloadTaskManager {
       task.error = error.message || String(error)
       task.errorCategory = classifyError(error, failureCategory)
       if (error.attempts) task.attempts = error.attempts
-      if (task.tempFilename) {
-        try {
-          const tempPath = path.join(downloadsDir, task.tempFilename)
-          if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
-        } catch {}
-        task.tempFilename = ''
-      }
+      this.cleanupTempFile(task)
       this.touch(task)
     } finally {
       activeControllers.delete(task.id)

@@ -252,6 +252,22 @@ textarea {
   margin: -4px 0 10px;
 }
 
+.task-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 10px;
+}
+
+.task-toolbar label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-toolbar select {
+  min-width: 140px;
+}
+
 .badges {
   display: flex;
   flex-wrap: wrap;
@@ -476,5 +492,12 @@ th {
   .download-options,
   .subscription-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .task-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .task-toolbar select {
+    width: 100%;
   }
 }
