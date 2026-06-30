@@ -356,6 +356,14 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
       return
     }
 
+    if (pathname === '/api/subscriptions/cancel-task-creation') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const result = subscriptionManager.cancelAllTaskCreation()
+      sendJson(res, 200, { success: true, result })
+      return
+    }
+
     if (pathname === '/api/subscriptions/local-match') {
       if (req.method === 'GET') {
         sendJson(res, 200, { success: true, state: subscriptionManager.getLocalLibraryMatchState() })
@@ -390,7 +398,16 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (subscriptionRunMatch) {
       if (req.method !== 'POST') return methodNotAllowed(res)
       if (!requireAdmin(req, res)) return
-      const subscription = await subscriptionManager.run(subscriptionRunMatch[1])
+      const subscription = subscriptionManager.startRun(subscriptionRunMatch[1])
+      sendJson(res, 200, { success: true, subscription })
+      return
+    }
+
+    const subscriptionCancelTaskCreationMatch = pathname.match(/^\/api\/subscriptions\/([^/]+)\/cancel-task-creation$/)
+    if (subscriptionCancelTaskCreationMatch) {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const subscription = subscriptionManager.cancelTaskCreation(subscriptionCancelTaskCreationMatch[1])
       sendJson(res, 200, { success: true, subscription })
       return
     }

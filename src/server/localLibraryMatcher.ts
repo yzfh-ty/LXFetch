@@ -317,8 +317,7 @@ const scanLibrary = async () => {
 }
 
 const orderedSubscriptions = (subscriptions: Subscription[], priority: string[]) => {
-  const enabled = subscriptions.filter(subscription => subscription.enabled !== false)
-  const byId = new Map(enabled.map(subscription => [subscription.id, subscription]))
+  const byId = new Map(subscriptions.map(subscription => [subscription.id, subscription]))
   const ordered: Subscription[] = []
   for (const id of priority) {
     const subscription = byId.get(id)
@@ -326,7 +325,7 @@ const orderedSubscriptions = (subscriptions: Subscription[], priority: string[])
     ordered.push(subscription)
     byId.delete(id)
   }
-  ordered.push(...enabled.filter(subscription => byId.has(subscription.id)))
+  ordered.push(...subscriptions.filter(subscription => byId.has(subscription.id)))
   return ordered
 }
 

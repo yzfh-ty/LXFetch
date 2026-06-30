@@ -107,7 +107,9 @@ Navidrome imports generated `.nsp` files during a library scan. Smart playlist t
 
 `LXFETCH_NAVIDROME_ENABLED` only enables the Navidrome integration code in LXFetch. It does not start a Navidrome server; Navidrome must run separately.
 
-For existing local music libraries, enable `LXFETCH_LOCAL_MATCH_ENABLED=true`. LXFetch will scan audio files under `downloads`, read tags or fall back to filenames like `Title - Artist.flac`, then match files to subscribed playlists by priority. Once a file is matched by an earlier subscription, it is removed from the remaining pool. Files that do not match any subscription can be exported to an unmatched playlist. Artist matching accepts common multi-artist separators such as `、`, `,`, `/`, `&`, and `feat.`.
+For existing local music libraries, enable `LXFETCH_LOCAL_MATCH_ENABLED=true`. LXFetch will scan audio files under `downloads`, read tags or fall back to filenames like `Title - Artist.flac`, then match files to subscribed playlists by priority. Once a file is matched by an earlier subscription, it is removed from the remaining pool. Disabled subscriptions still participate in local matching and smart playlist generation; they are only excluded from scheduled automatic downloads. Files that do not match any subscription can be exported to an unmatched playlist. Artist matching accepts common multi-artist separators such as `、`, `,`, `/`, `&`, and `feat.`.
+
+When a subscription updates, LXFetch scans the playlist or leaderboard first and then creates download tasks one by one. After scanning finishes and task creation begins, the remaining task creation can be cancelled from the subscriptions page. Already-created download tasks are not stopped automatically and can be stopped separately from the tasks page.
 
 Navidrome should mount the same downloads directory and read playlists from `_playlists`:
 

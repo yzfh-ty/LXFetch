@@ -434,7 +434,7 @@ export const exportSubscriptionPlaylists = async (
   const results: PlaylistExportResult[] = []
   let hasUpdatedPlaylist = false
 
-  for (const subscription of subscriptions.filter(subscription => subscription.enabled !== false)) {
+  for (const subscription of subscriptions) {
     try {
       const songs = await getSongs(subscription)
       const result = await exportSubscriptionPlaylist(

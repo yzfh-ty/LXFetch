@@ -582,6 +582,7 @@ const subscriptionStatusName = (status) => ({
   idle: '空闲',
   running: '更新中',
   success: '成功',
+  cancelled: '已取消',
   failed: '失败',
 }[status] || status || '空闲');
 
@@ -616,8 +617,11 @@ const renderSubscriptions = () => {
   const localMatchEnabled = !!(navidromeEnabled && state.config?.localMatch?.enabled);
   const syncAllButton = $('sync-navidrome-playlists');
   const syncLocalButton = $('sync-local-match');
+  const cancelAllButton = $('cancel-subscription-task-creation');
+  const hasRunningSubscription = state.subscriptions.some(sub => sub.running || sub.lastRunStatus === 'running');
   if (syncAllButton) syncAllButton.hidden = !navidromeEnabled;
   if (syncLocalButton) syncLocalButton.hidden = !localMatchEnabled;
+  if (cancelAllButton) cancelAllButton.hidden = !hasRunningSubscription;
   if (!state.subscriptions.length) {
     el.innerHTML = '<div class="meta">暂无订阅</div>';
     return;
@@ -641,8 +645,9 @@ const renderSubscriptions = () => {
     </div>
   ` : '';
   el.innerHTML = localSummary + state.subscriptions.map(sub => {
-    const statusClass = sub.lastRunStatus === 'success' ? 'ok' : (sub.lastRunStatus === 'failed' ? 'fail' : (sub.lastRunStatus === 'running' ? 'warn' : ''));
+    const statusClass = sub.lastRunStatus === 'success' ? 'ok' : (sub.lastRunStatus === 'failed' ? 'fail' : (sub.lastRunStatus === 'running' || sub.lastRunStatus === 'cancelled' ? 'warn' : ''));
     const order = priorityIndex.get(sub.id);
+    const phaseText = sub.runPhase === 'creating' ? '创建任务中' : (sub.runPhase === 'scanning' ? '扫描中' : '');
     return `
       <div class="subscription-item">
         <div class="item-title">
@@ -652,6 +657,8 @@ const renderSubscriptions = () => {
         <div class="meta">${subscriptionTypeName(sub.type)} · ${escapeHtml(sub.source)} · 每 ${formatInterval(sub.intervalMinutes)} · ${qualityLabel(sub.quality)}</div>
         <div class="badges">
           <span class="badge ${sub.enabled ? 'ok' : 'warn'}">${sub.enabled ? '启用' : '暂停'}</span>
+          ${phaseText ? `<span class="badge warn">${phaseText}</span>` : ''}
+          ${sub.cancelRequested ? '<span class="badge warn">取消中</span>' : ''}
           ${localMatchEnabled ? `<span class="badge">优先级 ${order || '-'}</span>` : ''}
           <span class="badge">发现 ${Number(sub.lastFoundCount || 0)}</span>
           <span class="badge">新增 ${Number(sub.lastCreatedCount || 0)}</span>
@@ -673,6 +680,7 @@ const renderSubscriptions = () => {
         ${sub.lastError ? `<div class="meta">${escapeHtml(sub.lastError)}</div>` : ''}
         <div class="row-actions">
           <button type="button" onclick="runSubscription('${sub.id}')">立即更新</button>
+          ${sub.running || sub.lastRunStatus === 'running' ? `<button type="button" onclick="cancelSubscriptionTaskCreation('${sub.id}')">取消创建剩余任务</button>` : ''}
           ${navidromeEnabled ? `<button type="button" onclick="${localMatchEnabled ? 'syncLocalLibraryMatch()' : `syncNavidromePlaylist('${sub.id}')`}">${localMatchEnabled ? '匹配本地' : '同步歌单'}</button>` : ''}
           ${localMatchEnabled ? `<button type="button" onclick="moveLocalMatchPriority('${sub.id}', -1)">上移</button><button type="button" onclick="moveLocalMatchPriority('${sub.id}', 1)">下移</button>` : ''}
           <button type="button" onclick="toggleSubscription('${sub.id}', ${!sub.enabled})">${sub.enabled ? '暂停' : '启用'}</button>
@@ -720,11 +728,11 @@ const syncLocalLibraryMatch = async () => {
 };
 
 window.moveLocalMatchPriority = async (id, direction) => {
-  const enabledIds = state.subscriptions.filter(sub => sub.enabled !== false).map(sub => sub.id);
+  const subscriptionIds = state.subscriptions.map(sub => sub.id);
   const existing = state.localMatchState?.priority || [];
   const priority = [];
-  for (const item of existing) if (enabledIds.includes(item) && !priority.includes(item)) priority.push(item);
-  for (const item of enabledIds) if (!priority.includes(item)) priority.push(item);
+  for (const item of existing) if (subscriptionIds.includes(item) && !priority.includes(item)) priority.push(item);
+  for (const item of subscriptionIds) if (!priority.includes(item)) priority.push(item);
   const index = priority.indexOf(id);
   if (index < 0) return;
   const nextIndex = Math.max(0, Math.min(priority.length - 1, index + direction));
@@ -761,6 +769,26 @@ window.runSubscription = async (id) => {
     toast('已开始更新订阅');
     await loadSubscriptions();
     await loadTasks().catch(() => {});
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.cancelSubscriptionTaskCreation = async (id) => {
+  try {
+    await api(`/api/subscriptions/${encodeURIComponent(id)}/cancel-task-creation`, { method: 'POST' });
+    toast('已请求取消剩余下载任务创建');
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+const cancelAllSubscriptionTaskCreation = async () => {
+  try {
+    const data = await api('/api/subscriptions/cancel-task-creation', { method: 'POST' });
+    toast(`已请求取消 ${Number(data.result?.requested || 0)} 个订阅的剩余任务创建`);
+    await loadSubscriptions();
   } catch (error) {
     toast(error.message);
   }
@@ -1391,6 +1419,7 @@ const bindEvents = () => {
   $('refresh-subscriptions').addEventListener('click', () => loadSubscriptions().catch(error => toast(error.message)));
   $('sync-local-match').addEventListener('click', () => syncLocalLibraryMatch());
   $('sync-navidrome-playlists').addEventListener('click', () => syncAllNavidromePlaylists());
+  $('cancel-subscription-task-creation').addEventListener('click', () => cancelAllSubscriptionTaskCreation());
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
   $('task-status-filter').addEventListener('change', event => {
     state.taskStatusFilter = event.target.value;

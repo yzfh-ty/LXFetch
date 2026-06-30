@@ -36,7 +36,7 @@ export interface Subscription {
   downloadedKeys: string[]
   lastCheckedAt: number
   lastUpdatedAt: number
-  lastRunStatus: 'idle' | 'running' | 'success' | 'failed'
+  lastRunStatus: 'idle' | 'running' | 'success' | 'failed' | 'cancelled'
   lastError: string
   lastFoundCount: number
   lastCreatedCount: number
@@ -67,9 +67,20 @@ const MAX_FETCH_SONGS = 500
 const MAX_STORED_KEYS = 5000
 const PLAYLIST_SYNC_DEBOUNCE_MS = 30 * 1000
 
-const sleep = async (ms: number) => {
+const sleep = async (ms: number, shouldStop?: () => boolean) => {
   if (ms <= 0) return
-  await new Promise(resolve => setTimeout(resolve, ms))
+  const stepMs = 250
+  let remaining = ms
+  while (remaining > 0) {
+    if (shouldStop?.()) return
+    const waitMs = Math.min(stepMs, remaining)
+    await new Promise(resolve => setTimeout(resolve, waitMs))
+    remaining -= waitMs
+  }
+}
+
+const yieldToEventLoop = async () => {
+  await new Promise(resolve => setImmediate(resolve))
 }
 
 const ensureSubscriptionsFile = () => {
@@ -101,6 +112,8 @@ const pinSongSource = (songInfo: any, source: string) => {
 class SubscriptionManager {
   private subscriptions: Subscription[] = []
   private runningIds = new Set<string>()
+  private cancelRequestedIds = new Set<string>()
+  private runPhases = new Map<string, 'scanning' | 'creating'>()
   private timer: NodeJS.Timeout | null = null
   private playlistTimer: NodeJS.Timeout | null = null
   private playlistSyncTimer: NodeJS.Timeout | null = null
@@ -155,6 +168,8 @@ class SubscriptionManager {
     return this.subscriptions.map(subscription => ({
       ...subscription,
       running: this.runningIds.has(subscription.id),
+      cancelRequested: this.cancelRequestedIds.has(subscription.id),
+      runPhase: this.runPhases.get(subscription.id) || '',
     }))
   }
 
@@ -256,6 +271,39 @@ class SubscriptionManager {
     subscription.lastInvalidCount = 0
     this.touch(subscription)
     return subscription
+  }
+
+  startRun(id: string) {
+    const subscription = this.get(id)
+    if (!subscription) throw new Error('Subscription not found')
+    if (!this.runningIds.has(id)) {
+      void this.run(id).catch(error => {
+        console.warn('[lxfetch] subscription run failed:', error.message)
+      })
+    }
+    return this.list().find(item => item.id === id) || subscription
+  }
+
+  cancelTaskCreation(id: string) {
+    const subscription = this.get(id)
+    if (!subscription) throw new Error('Subscription not found')
+    if (this.runningIds.has(id)) {
+      this.cancelRequestedIds.add(id)
+      this.runPhases.set(id, this.runPhases.get(id) || 'scanning')
+    }
+    return subscription
+  }
+
+  cancelAllTaskCreation() {
+    const ids = Array.from(this.runningIds)
+    for (const id of ids) {
+      this.cancelRequestedIds.add(id)
+      this.runPhases.set(id, this.runPhases.get(id) || 'scanning')
+    }
+    return {
+      requested: ids.length,
+      subscriptions: this.list().filter(subscription => ids.includes(subscription.id)),
+    }
   }
 
   startScheduler() {
@@ -446,6 +494,8 @@ class SubscriptionManager {
     if (this.runningIds.has(id)) return subscription
 
     this.runningIds.add(id)
+    this.cancelRequestedIds.delete(id)
+    this.runPhases.set(id, 'scanning')
     subscription.lastRunStatus = 'running'
     subscription.lastError = ''
     subscription.lastCheckedAt = Date.now()
@@ -454,14 +504,22 @@ class SubscriptionManager {
     try {
       const activeKeys = downloadTaskManager.getActiveSongKeys()
       const songs = await this.fetchSongs(subscription)
+      this.runPhases.set(id, 'creating')
       const configuredMaxTasks = Number(appConfig.subscription.maxTasksPerRun || 0)
       const maxTasksPerRun = configuredMaxTasks > 0 ? configuredMaxTasks : Number.POSITIVE_INFINITY
       const taskCreateDelayMs = Math.max(0, Number(appConfig.subscription.taskCreateDelayMs || 0))
       let created = 0
       let skipped = 0
       let invalid = 0
+      let cancelled = false
 
-      for (const song of songs) {
+      for (let index = 0; index < songs.length; index++) {
+        const song = songs[index]
+        if (this.cancelRequestedIds.has(id)) {
+          cancelled = true
+          skipped += songs.length - index
+          break
+        }
         if (created >= maxTasksPerRun) break
         const key = getSongKey(song)
         if (!key) {
@@ -480,17 +538,23 @@ class SubscriptionManager {
         activeKeys.add(key)
         subscription.downloadedKeys.push(key)
         created += 1
-        if (taskCreateDelayMs > 0) await sleep(taskCreateDelayMs)
+        if (taskCreateDelayMs > 0) await sleep(taskCreateDelayMs, () => this.cancelRequestedIds.has(id))
+        else await yieldToEventLoop()
       }
 
       subscription.downloadedKeys = Array.from(new Set(subscription.downloadedKeys)).slice(-MAX_STORED_KEYS)
-      subscription.lastRunStatus = 'success'
+      if (cancelled || this.cancelRequestedIds.has(id)) {
+        subscription.lastRunStatus = 'cancelled'
+        subscription.lastError = '已取消剩余下载任务创建'
+      } else {
+        subscription.lastRunStatus = 'success'
+        subscription.lastError = ''
+      }
       subscription.lastFoundCount = songs.length
       subscription.lastCreatedCount = created
       subscription.lastSkippedCount = skipped
       subscription.lastInvalidCount = invalid
       subscription.lastUpdatedAt = Date.now()
-      subscription.lastError = ''
       this.touch(subscription)
       void this.syncNavidromePlaylist(subscription.id, songs).catch(error => {
         console.warn('[lxfetch] navidrome playlist sync failed:', error.message)
@@ -503,6 +567,8 @@ class SubscriptionManager {
       throw error
     } finally {
       this.runningIds.delete(id)
+      this.cancelRequestedIds.delete(id)
+      this.runPhases.delete(id)
     }
   }
 }

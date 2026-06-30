@@ -337,7 +337,7 @@ Data files:
 Match order:
 
 1. Use configured priority order.
-2. Any enabled subscription not listed in priority is appended after the configured items.
+2. Any subscription not listed in priority is appended after the configured items, including disabled subscriptions.
 3. Each local file can be assigned once. When an earlier subscription matches a file, that file is removed from the remaining pool.
 4. Remaining unassigned files can be exported to an unmatched smart playlist.
 
@@ -364,7 +364,13 @@ GET /api/subscriptions/local-match
 POST /api/subscriptions/local-match
 POST /api/subscriptions/local-match/priority
 GET /api/subscriptions/local-match/index
+POST /api/subscriptions/:id/cancel-task-creation
+POST /api/subscriptions/cancel-task-creation
 ```
+
+Disabled subscriptions are included in local matching and smart playlist export. They are still excluded from scheduled automatic subscription downloads.
+
+Subscription update cancellation only stops creation of remaining download tasks after playlist or leaderboard scanning. Already-created download tasks continue unless stopped from the task API/UI.
 
 ## Subscription State
 
