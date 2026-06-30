@@ -11,6 +11,7 @@ import {
   removeSubscriptionPlaylist,
   type PlaylistExportResult,
 } from './navidromePlaylistExporter'
+import { localLibraryMatcher } from './localLibraryMatcher'
 
 type SubscriptionType = 'songList' | 'leaderboard'
 
@@ -269,6 +270,7 @@ class SubscriptionManager {
       void this.runDueSubscriptions().catch(() => {})
     }, 2000).unref?.()
     this.startPlaylistScheduler()
+    localLibraryMatcher.startWatcher()
   }
 
   stopScheduler() {
@@ -283,6 +285,7 @@ class SubscriptionManager {
       clearTimeout(this.playlistSyncTimer)
       this.playlistSyncTimer = null
     }
+    void localLibraryMatcher.stopWatcher().catch(() => {})
   }
 
   private startPlaylistScheduler() {
@@ -393,6 +396,7 @@ class SubscriptionManager {
   }
 
   async syncAllNavidromePlaylists() {
+    if (appConfig.localMatch.enabled) return this.syncLocalLibraryPlaylists()
     const results = await exportSubscriptionPlaylists(this.subscriptions, subscription => this.fetchSongs(subscription))
     for (const result of results) {
       const subscription = this.get(result.subscriptionId)
@@ -400,6 +404,28 @@ class SubscriptionManager {
       this.applyPlaylistResult(subscription, result)
     }
     return results
+  }
+
+  async syncLocalLibraryPlaylists() {
+    const result = await localLibraryMatcher.sync(this.subscriptions, subscription => this.fetchSongs(subscription))
+    for (const item of result.results) {
+      const subscription = this.get(item.subscriptionId)
+      if (!subscription) continue
+      this.applyPlaylistResult(subscription, item)
+    }
+    return result
+  }
+
+  getLocalLibraryMatchState() {
+    return localLibraryMatcher.getState()
+  }
+
+  getLocalLibraryIndex() {
+    return localLibraryMatcher.getIndex()
+  }
+
+  setLocalLibraryMatchPriority(priority: string[]) {
+    return localLibraryMatcher.setPriority(priority, this.subscriptions)
   }
 
   scheduleNavidromePlaylistSync() {

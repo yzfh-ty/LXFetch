@@ -92,6 +92,10 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 | `LXFETCH_NAVIDROME_BASE_URL` | 空 | Navidrome 地址，例如 `http://navidrome:4533`。启用自动扫描时需要。 |
 | `LXFETCH_NAVIDROME_USERNAME` | 空 | Navidrome 用户名。启用自动扫描时需要。 |
 | `LXFETCH_NAVIDROME_PASSWORD` | 空 | Navidrome 密码。启用自动扫描时需要。 |
+| `LXFETCH_LOCAL_MATCH_ENABLED` | `false` | 扫描下载目录中已有音频，并按订阅优先级匹配后生成 `.nsp`。 |
+| `LXFETCH_LOCAL_MATCH_WATCH_ENABLED` | `true` | 监听下载目录变化，发现音频新增/变更/删除后延迟重新匹配。 |
+| `LXFETCH_LOCAL_MATCH_MODE` | `duration` | 本地匹配模式：`strict` 只按平台 ID，`metadata` 按歌名/歌手/专辑，`duration` 再结合时长容差。 |
+| `LXFETCH_LOCAL_MATCH_INCLUDE_UNMATCHED_PLAYLIST` | `true` | 生成一个“未匹配”智能歌单，收纳没有匹配到任何订阅歌单的本地文件。 |
 
 完整变量见 `.env.example`。
 
@@ -100,6 +104,10 @@ Docker 部署推荐修改 `.env`。环境变量优先级高于 `config.js`。
 启用 `LXFETCH_NAVIDROME_ENABLED=true` 和 `LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED=true` 后，LXFetch 会把订阅的歌单/榜单导出为 Navidrome `.nsp` 智能歌单，并在文件里写入 `"public": true`，方便所有 Navidrome 用户可见。无同名冲突时 Navidrome 歌单名使用原标题；多个订阅同名时会自动追加平台或短 ID 后缀区分。
 
 Navidrome 会在媒体库扫描时导入生成的 `.nsp` 文件；智能歌单的曲目数量可能在 Navidrome 中打开歌单时刷新。
+
+`LXFETCH_NAVIDROME_ENABLED` 只表示启用 LXFetch 里的 Navidrome 联动逻辑，不会启动 Navidrome 服务。Navidrome 需要你单独运行。
+
+如果下载目录里已经有很多本地歌曲，建议同时启用 `LXFETCH_LOCAL_MATCH_ENABLED=true`。启用后，LXFetch 会扫描 `downloads` 下已有音频，读取标签或从 `歌名 - 歌手.flac` 这类文件名兜底解析，然后按订阅列表里的优先级匹配到对应歌单。一个文件被前面的歌单匹配后，会从剩余池里移除，后面的歌单只匹配剩余文件。没有匹配到任何订阅的文件会进入“未匹配”歌单。
 
 Navidrome 需要挂载同一个下载目录，并把歌单目录指向 `_playlists`：
 

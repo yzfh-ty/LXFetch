@@ -323,6 +323,49 @@ POST /api/subscriptions/navidrome-sync
 
 Sync all subscriptions and return an array of results.
 
+## Existing Local Library Matching
+
+When `localMatch.enabled` is true, all-subscription Navidrome sync first scans existing audio files under `downloadsDir` and matches those files to subscriptions by priority.
+
+This mode is intended for libraries that already contain audio files before LXFetch has subscription download records. Without it, a subscription playlist can be exported as an empty `.nsp` because `downloads_index.json` has no source-song mapping for those files.
+
+Data files:
+
+- `data/local_library_index.json`: cached scan of local audio files, including relative filepath, tags, duration, quality details, normalized match keys, and source song key when available.
+- `data/local_match_state.json`: priority order, last scan/match timestamps, summary counts, and last playlist export stats.
+
+Match order:
+
+1. Use configured priority order.
+2. Any enabled subscription not listed in priority is appended after the configured items.
+3. Each local file can be assigned once. When an earlier subscription matches a file, that file is removed from the remaining pool.
+4. Remaining unassigned files can be exported to an unmatched smart playlist.
+
+Match modes:
+
+- `strict`: match by LXFetch/source song key only. This is safest for files downloaded by LXFetch.
+- `metadata`: match by normalized title, artist, and optionally album.
+- `duration`: match by metadata and duration tolerance. This is the default for mixed local libraries.
+
+Filename fallback:
+
+- If audio tags are missing, LXFetch can infer title and artist from filenames like `Title - Artist.flac`.
+
+Watcher:
+
+- `localMatch.watchEnabled` watches the download directory for audio file add/change/delete events.
+- Changes are debounced by `watchDebounceMs`.
+- The Navidrome playlist directory is ignored to avoid loops when `.nsp` files are written.
+
+Admin-only endpoints:
+
+```http
+GET /api/subscriptions/local-match
+POST /api/subscriptions/local-match
+POST /api/subscriptions/local-match/priority
+GET /api/subscriptions/local-match/index
+```
+
 ## Subscription State
 
 The MVP can avoid mutating the subscription schema. Stats can be returned from the manual sync endpoint and logged from scheduled sync.
@@ -369,6 +412,10 @@ Unit-style tests or focused integration checks:
 - Export does not delete user-created `.nsp` files.
 - Disabled Navidrome config does not export or scan.
 - Scan failures do not remove generated `.nsp` files.
+- Existing local files can be scanned and matched into `.nsp` playlists.
+- Match priority removes already matched files from later subscriptions.
+- Unmatched local files can be exported into a separate public `.nsp` playlist.
+- The watcher ignores the Navidrome playlist directory.
 
 Manual Docker verification:
 

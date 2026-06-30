@@ -66,4 +66,17 @@ module.exports = {
     clientName: 'lxfetch',
     apiVersion: '1.16.1',
   },
+  localMatch: {
+    // Match existing local audio files to subscribed playlists by priority and export public .nsp playlists.
+    enabled: false,
+    // Watch the download directory and re-run matching when local audio files change.
+    watchEnabled: true,
+    watchDebounceMs: 30000,
+    // Also export a public smart playlist for files not matched by any subscription.
+    includeUnmatchedPlaylist: true,
+    unmatchedPlaylistName: '未匹配',
+    // strict: source ID only; metadata: title/artist/album; duration: metadata plus duration tolerance.
+    matchMode: 'duration',
+    durationToleranceSeconds: 3,
+  },
 }

@@ -25,6 +25,7 @@ const state = {
   taskStatusFilter: 'all',
   files: [],
   subscriptions: [],
+  localMatchState: null,
   subscriptionIntervalMinutes: Number(localStorage.getItem(SUBSCRIPTION_INTERVAL_STORAGE_KEY) || 360),
   searchResults: [],
   songLists: [],
@@ -140,6 +141,7 @@ const renderConfigSummary = () => {
   const download = cfg.download || {};
   const subscription = cfg.subscription || {};
   const navidrome = cfg.navidrome || {};
+  const localMatch = cfg.localMatch || {};
   const netease = cfg.netease || {};
   const platformRows = (cfg.platforms || []).map(platform => ([
     `${platform.name} (${platform.id})`,
@@ -190,6 +192,18 @@ const renderConfigSummary = () => {
           ['服务地址已配置', navidrome.baseUrlConfigured],
           ['用户已配置', navidrome.usernameConfigured],
           ['密码已配置', navidrome.passwordConfigured],
+        ])}
+      </div>
+      <div>
+        <h3>本地曲库匹配</h3>
+        ${renderConfigTable([
+          ['启用', localMatch.enabled],
+          ['监听目录', localMatch.watchEnabled],
+          ['监听防抖 ms', localMatch.watchDebounceMs],
+          ['生成未匹配歌单', localMatch.includeUnmatchedPlaylist],
+          ['未匹配歌单名', localMatch.unmatchedPlaylistName],
+          ['匹配模式', localMatch.matchMode],
+          ['时长容差秒', localMatch.durationToleranceSeconds],
         ])}
       </div>
       <div>
@@ -583,20 +597,52 @@ const subscriptionPayload = (type, item, targetId, source) => ({
 const loadSubscriptions = async () => {
   const data = await api('/api/subscriptions');
   state.subscriptions = data.subscriptions || [];
+  if (state.config?.localMatch?.enabled) {
+    try {
+      const localMatch = await api('/api/subscriptions/local-match');
+      state.localMatchState = localMatch.state || null;
+    } catch {
+      state.localMatchState = null;
+    }
+  } else {
+    state.localMatchState = null;
+  }
   renderSubscriptions();
 };
 
 const renderSubscriptions = () => {
   const el = $('subscriptions-list');
   const navidromeEnabled = !!(state.config?.navidrome?.enabled && state.config?.navidrome?.playlistSyncEnabled);
+  const localMatchEnabled = !!(navidromeEnabled && state.config?.localMatch?.enabled);
   const syncAllButton = $('sync-navidrome-playlists');
+  const syncLocalButton = $('sync-local-match');
   if (syncAllButton) syncAllButton.hidden = !navidromeEnabled;
+  if (syncLocalButton) syncLocalButton.hidden = !localMatchEnabled;
   if (!state.subscriptions.length) {
     el.innerHTML = '<div class="meta">暂无订阅</div>';
     return;
   }
-  el.innerHTML = state.subscriptions.map(sub => {
+  const priority = state.localMatchState?.priority || [];
+  const priorityIndex = new Map(priority.map((id, index) => [id, index + 1]));
+  const localSummary = localMatchEnabled ? `
+    <div class="subscription-item">
+      <div class="item-title">
+        <span>本地曲库匹配</span>
+        <span class="badge ${state.localMatchState?.lastStatus === 'failed' ? 'fail' : (state.localMatchState?.lastStatus === 'running' ? 'warn' : 'ok')}">${escapeHtml(state.localMatchState?.lastStatus || 'idle')}</span>
+      </div>
+      <div class="badges">
+        <span class="badge">扫描 ${Number(state.localMatchState?.lastTrackCount || 0)}</span>
+        <span class="badge">已匹配 ${Number(state.localMatchState?.lastMatchedCount || 0)}</span>
+        <span class="badge">未匹配 ${Number(state.localMatchState?.lastUnmatchedCount || 0)}</span>
+        <span class="badge">监听 ${state.localMatchState?.watchEnabled ? '开启' : '关闭'}</span>
+      </div>
+      <div class="meta">上次匹配：${formatTime(state.localMatchState?.lastMatchedAt)} · 上次扫描：${formatTime(state.localMatchState?.lastScannedAt)}</div>
+      ${state.localMatchState?.lastError ? `<div class="meta">${escapeHtml(state.localMatchState.lastError)}</div>` : ''}
+    </div>
+  ` : '';
+  el.innerHTML = localSummary + state.subscriptions.map(sub => {
     const statusClass = sub.lastRunStatus === 'success' ? 'ok' : (sub.lastRunStatus === 'failed' ? 'fail' : (sub.lastRunStatus === 'running' ? 'warn' : ''));
+    const order = priorityIndex.get(sub.id);
     return `
       <div class="subscription-item">
         <div class="item-title">
@@ -606,6 +652,7 @@ const renderSubscriptions = () => {
         <div class="meta">${subscriptionTypeName(sub.type)} · ${escapeHtml(sub.source)} · 每 ${formatInterval(sub.intervalMinutes)} · ${qualityLabel(sub.quality)}</div>
         <div class="badges">
           <span class="badge ${sub.enabled ? 'ok' : 'warn'}">${sub.enabled ? '启用' : '暂停'}</span>
+          ${localMatchEnabled ? `<span class="badge">优先级 ${order || '-'}</span>` : ''}
           <span class="badge">发现 ${Number(sub.lastFoundCount || 0)}</span>
           <span class="badge">新增 ${Number(sub.lastCreatedCount || 0)}</span>
           <span class="badge">跳过 ${Number(sub.lastSkippedCount || 0)}</span>
@@ -626,7 +673,8 @@ const renderSubscriptions = () => {
         ${sub.lastError ? `<div class="meta">${escapeHtml(sub.lastError)}</div>` : ''}
         <div class="row-actions">
           <button type="button" onclick="runSubscription('${sub.id}')">立即更新</button>
-          ${navidromeEnabled ? `<button type="button" onclick="syncNavidromePlaylist('${sub.id}')">同步歌单</button>` : ''}
+          ${navidromeEnabled ? `<button type="button" onclick="${localMatchEnabled ? 'syncLocalLibraryMatch()' : `syncNavidromePlaylist('${sub.id}')`}">${localMatchEnabled ? '匹配本地' : '同步歌单'}</button>` : ''}
+          ${localMatchEnabled ? `<button type="button" onclick="moveLocalMatchPriority('${sub.id}', -1)">上移</button><button type="button" onclick="moveLocalMatchPriority('${sub.id}', 1)">下移</button>` : ''}
           <button type="button" onclick="toggleSubscription('${sub.id}', ${!sub.enabled})">${sub.enabled ? '暂停' : '启用'}</button>
           <button type="button" onclick="resetSubscription('${sub.id}')">重置记录</button>
           <button type="button" class="danger" onclick="deleteSubscription('${sub.id}')">删除</button>
@@ -650,10 +698,46 @@ window.syncNavidromePlaylist = async (id) => {
 const syncAllNavidromePlaylists = async () => {
   try {
     const data = await api('/api/subscriptions/navidrome-sync', { method: 'POST' });
-    const results = data.results || [];
+    const results = data.result?.results || data.results || [];
     const downloaded = results.reduce((sum, item) => sum + Number(item.downloaded || 0), 0);
     const missing = results.reduce((sum, item) => sum + Number(item.missing || 0), 0);
     toast(`已同步 ${results.length} 个歌单，已下载 ${downloaded} 首，未下载 ${missing} 首`);
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+const syncLocalLibraryMatch = async () => {
+  try {
+    const data = await api('/api/subscriptions/local-match', { method: 'POST' });
+    const result = data.result || {};
+    toast(`本地匹配完成：扫描 ${Number(result.scanned || 0)} 首，匹配 ${Number(result.matched || 0)} 首，未匹配 ${Number(result.unmatched || 0)} 首`);
+    await loadSubscriptions();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+window.moveLocalMatchPriority = async (id, direction) => {
+  const enabledIds = state.subscriptions.filter(sub => sub.enabled !== false).map(sub => sub.id);
+  const existing = state.localMatchState?.priority || [];
+  const priority = [];
+  for (const item of existing) if (enabledIds.includes(item) && !priority.includes(item)) priority.push(item);
+  for (const item of enabledIds) if (!priority.includes(item)) priority.push(item);
+  const index = priority.indexOf(id);
+  if (index < 0) return;
+  const nextIndex = Math.max(0, Math.min(priority.length - 1, index + direction));
+  if (nextIndex === index) return;
+  const [item] = priority.splice(index, 1);
+  priority.splice(nextIndex, 0, item);
+  try {
+    const data = await api('/api/subscriptions/local-match/priority', {
+      method: 'POST',
+      body: JSON.stringify({ priority }),
+    });
+    state.localMatchState = data.state || state.localMatchState;
+    toast('匹配优先级已更新');
     await loadSubscriptions();
   } catch (error) {
     toast(error.message);
@@ -1305,6 +1389,7 @@ const bindEvents = () => {
     }
   });
   $('refresh-subscriptions').addEventListener('click', () => loadSubscriptions().catch(error => toast(error.message)));
+  $('sync-local-match').addEventListener('click', () => syncLocalLibraryMatch());
   $('sync-navidrome-playlists').addEventListener('click', () => syncAllNavidromePlaylists());
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
   $('task-status-filter').addEventListener('change', event => {

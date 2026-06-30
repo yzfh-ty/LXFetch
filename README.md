@@ -92,6 +92,10 @@ Important variables:
 | `LXFETCH_NAVIDROME_BASE_URL` | empty | Navidrome URL, for example `http://navidrome:4533`. Required for automatic scan. |
 | `LXFETCH_NAVIDROME_USERNAME` | empty | Navidrome username. Required for automatic scan. |
 | `LXFETCH_NAVIDROME_PASSWORD` | empty | Navidrome password. Required for automatic scan. |
+| `LXFETCH_LOCAL_MATCH_ENABLED` | `false` | Scan existing audio files under the download directory and match them to subscriptions before writing `.nsp` playlists. |
+| `LXFETCH_LOCAL_MATCH_WATCH_ENABLED` | `true` | Watch the download directory and rerun matching after audio files are added, changed, or removed. |
+| `LXFETCH_LOCAL_MATCH_MODE` | `duration` | Local match mode: `strict` uses platform IDs only, `metadata` uses title/artist/album, and `duration` also allows a duration tolerance. |
+| `LXFETCH_LOCAL_MATCH_INCLUDE_UNMATCHED_PLAYLIST` | `true` | Export an unmatched smart playlist for local files not assigned to any subscription. |
 
 See `.env.example` for the full list.
 
@@ -100,6 +104,10 @@ See `.env.example` for the full list.
 When `LXFETCH_NAVIDROME_ENABLED=true` and `LXFETCH_NAVIDROME_PLAYLIST_SYNC_ENABLED=true`, LXFetch exports subscribed playlists and leaderboards as Navidrome `.nsp` smart playlists with `"public": true`, so they are visible to all Navidrome users. If there is no name conflict, the Navidrome playlist uses the original title. If multiple subscriptions share the same title, LXFetch appends a platform or short ID suffix to distinguish them.
 
 Navidrome imports generated `.nsp` files during a library scan. Smart playlist track counts may refresh when the playlist is opened in Navidrome.
+
+`LXFETCH_NAVIDROME_ENABLED` only enables the Navidrome integration code in LXFetch. It does not start a Navidrome server; Navidrome must run separately.
+
+For existing local music libraries, enable `LXFETCH_LOCAL_MATCH_ENABLED=true`. LXFetch will scan audio files under `downloads`, read tags or fall back to filenames like `Title - Artist.flac`, then match files to subscribed playlists by priority. Once a file is matched by an earlier subscription, it is removed from the remaining pool. Files that do not match any subscription can be exported to an unmatched playlist.
 
 Navidrome should mount the same downloads directory and read playlists from `_playlists`:
 

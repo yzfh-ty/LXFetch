@@ -141,6 +141,15 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
           usernameConfigured: !!appConfig.navidrome.username,
           passwordConfigured: !!appConfig.navidrome.password,
         },
+        localMatch: {
+          enabled: appConfig.localMatch.enabled,
+          watchEnabled: appConfig.localMatch.watchEnabled,
+          watchDebounceMs: appConfig.localMatch.watchDebounceMs,
+          includeUnmatchedPlaylist: appConfig.localMatch.includeUnmatchedPlaylist,
+          unmatchedPlaylistName: appConfig.localMatch.unmatchedPlaylistName,
+          matchMode: appConfig.localMatch.matchMode,
+          durationToleranceSeconds: appConfig.localMatch.durationToleranceSeconds,
+        },
         netease: {
           cookieResolverEnabled: isNeteaseCookieResolverEnabled(),
         },
@@ -338,8 +347,42 @@ export const handleRequest = async (req: IncomingMessage, res: ServerResponse) =
     if (pathname === '/api/subscriptions/navidrome-sync') {
       if (req.method !== 'POST') return methodNotAllowed(res)
       if (!requireAdmin(req, res)) return
-      const results = await subscriptionManager.syncAllNavidromePlaylists()
-      sendJson(res, 200, { success: true, results })
+      const result = await subscriptionManager.syncAllNavidromePlaylists()
+      sendJson(res, 200, {
+        success: true,
+        result,
+        results: Array.isArray(result) ? result : result.results,
+      })
+      return
+    }
+
+    if (pathname === '/api/subscriptions/local-match') {
+      if (req.method === 'GET') {
+        sendJson(res, 200, { success: true, state: subscriptionManager.getLocalLibraryMatchState() })
+        return
+      }
+      if (req.method === 'POST') {
+        if (!requireAdmin(req, res)) return
+        const result = await subscriptionManager.syncLocalLibraryPlaylists()
+        sendJson(res, 200, { success: true, result })
+        return
+      }
+      return methodNotAllowed(res)
+    }
+
+    if (pathname === '/api/subscriptions/local-match/priority') {
+      if (req.method !== 'POST') return methodNotAllowed(res)
+      if (!requireAdmin(req, res)) return
+      const body = await readJson(req).catch(() => ({}))
+      const priority = Array.isArray(body.priority) ? body.priority.map((item: any) => String(item)) : []
+      const state = subscriptionManager.setLocalLibraryMatchPriority(priority)
+      sendJson(res, 200, { success: true, state })
+      return
+    }
+
+    if (pathname === '/api/subscriptions/local-match/index') {
+      if (req.method !== 'GET') return methodNotAllowed(res)
+      sendJson(res, 200, { success: true, tracks: subscriptionManager.getLocalLibraryIndex() })
       return
     }
 

@@ -35,6 +35,14 @@ export interface PlaylistExportResult {
   error: string
 }
 
+interface FilePlaylistInput {
+  key: string
+  displayName: string
+  rows: Array<{ filename: string }>
+  found?: number
+  missing?: number
+}
+
 const MANIFEST_FILENAME = 'navidrome_playlists.json'
 
 const isSyncEnabled = () => !!(appConfig.navidrome.enabled && appConfig.navidrome.playlistSyncEnabled)
@@ -153,6 +161,35 @@ const getPlaylistFilename = (subscription: Subscription, displayName: string, ma
   return candidate
 }
 
+const getManagedPlaylistFilename = (key: string, displayName: string, manifest: PlaylistManifest) => {
+  const existing = manifest.entries.find(entry => entry.subscriptionId === key)
+  const baseName = limitFilename(sanitizeFilenamePart(displayName), 150)
+  let candidate = `${baseName}.nsp`
+  let index = 2
+  const used = new Set(
+    manifest.entries
+      .filter(entry => entry.subscriptionId !== key)
+      .map(entry => entry.filename),
+  )
+
+  const isTaken = (filename: string) => {
+    if (used.has(filename)) return true
+    if (existing?.filename === filename) return false
+    return fs.existsSync(path.join(navidromePlaylistDir, filename))
+  }
+
+  while (isTaken(candidate)) {
+    const indexedBaseName = limitFilename(`${baseName} (${index})`, 150)
+    candidate = `${indexedBaseName}.nsp`
+    index += 1
+  }
+
+  if (!existing) return candidate
+  if (existing.filename && !existing.filename.endsWith('.nsp')) return candidate
+  if (existing.displayName === displayName && existing.filename) return existing.filename
+  return candidate
+}
+
 const makeNavidromeFilepath = (filename: string) => {
   const filePath = resolveInside(downloadsDir, filename)
   if (appConfig.navidrome.playlistPathMode === 'absolute') return filePath
@@ -175,6 +212,77 @@ const buildSmartPlaylist = (
     any: rules.length ? rules : [{ is: { filepath: '__lxfetch_empty_playlist__' } }],
   }
   return `${JSON.stringify(playlist, null, 2)}\n`
+}
+
+const writeManagedFilePlaylist = async (
+  manifest: PlaylistManifest,
+  input: FilePlaylistInput,
+  scanAfterExport = true,
+): Promise<PlaylistExportResult> => {
+  if (!isSyncEnabled()) {
+    return {
+      enabled: false,
+      subscriptionId: input.key,
+      playlistFile: '',
+      displayName: '',
+      found: 0,
+      downloaded: 0,
+      missing: 0,
+      skipped: 0,
+      updated: false,
+      scan: { requested: false, ok: true, error: '' },
+      error: '',
+    }
+  }
+
+  ensurePlaylistDir()
+  const filename = getManagedPlaylistFilename(input.key, input.displayName, manifest)
+  const playlistFilePath = path.join(navidromePlaylistDir, filename)
+  const existingEntry = manifest.entries.find(entry => entry.subscriptionId === input.key)
+  const rows: Array<{ filename: string }> = []
+  const seen = new Set<string>()
+  let skipped = 0
+
+  for (const row of input.rows) {
+    const filename = String(row.filename || '')
+    if (!filename || seen.has(filename)) {
+      skipped += 1
+      continue
+    }
+    try {
+      resolveInside(downloadsDir, filename)
+    } catch {
+      skipped += 1
+      continue
+    }
+    seen.add(filename)
+    rows.push({ filename })
+  }
+
+  const content = buildSmartPlaylist(input.displayName, rows)
+  const oldContent = fs.existsSync(playlistFilePath) ? fs.readFileSync(playlistFilePath, 'utf8') : ''
+  const updated = oldContent !== content || existingEntry?.displayName !== input.displayName || existingEntry?.filename !== filename
+
+  writeFileAtomic(playlistFilePath, content)
+  if (existingEntry?.filename && existingEntry.filename !== filename) {
+    safeRemoveOldPlaylist(existingEntry.filename)
+  }
+  updateManagedManifestEntry(manifest, input.key, filename, input.displayName)
+
+  const scan = updated && scanAfterExport ? await requestNavidromeScan() : { requested: false, ok: true, error: '' }
+  return {
+    enabled: true,
+    subscriptionId: input.key,
+    playlistFile: path.relative(downloadsDir, playlistFilePath).replace(/\\/g, '/'),
+    displayName: input.displayName,
+    found: Number(input.found ?? input.rows.length),
+    downloaded: rows.length,
+    missing: Number(input.missing ?? 0),
+    skipped,
+    updated,
+    scan,
+    error: '',
+  }
 }
 
 const safeRemoveOldPlaylist = (filename: string) => {
@@ -212,6 +320,28 @@ const updateManifestEntry = (
   } else {
     manifest.entries.push({
       subscriptionId: subscription.id,
+      filename,
+      displayName,
+      updatedAt: now,
+    })
+  }
+}
+
+const updateManagedManifestEntry = (
+  manifest: PlaylistManifest,
+  key: string,
+  filename: string,
+  displayName: string,
+) => {
+  const now = Date.now()
+  const existing = manifest.entries.find(entry => entry.subscriptionId === key)
+  if (existing) {
+    existing.filename = filename
+    existing.displayName = displayName
+    existing.updatedAt = now
+  } else {
+    manifest.entries.push({
+      subscriptionId: key,
       filename,
       displayName,
       updatedAt: now,
@@ -338,5 +468,46 @@ export const exportSubscriptionPlaylists = async (
     if (lastUpdated) lastUpdated.scan = scan
   }
 
+  return results
+}
+
+export const exportFilePlaylists = async (
+  playlists: FilePlaylistInput[],
+  scanAfterExport = true,
+): Promise<PlaylistExportResult[]> => {
+  if (!isSyncEnabled()) return []
+  ensurePlaylistDir()
+  const manifest = readManifest()
+  const results: PlaylistExportResult[] = []
+  let hasUpdatedPlaylist = false
+
+  for (const playlist of playlists) {
+    try {
+      const result = await writeManagedFilePlaylist(manifest, playlist, false)
+      if (result.updated) hasUpdatedPlaylist = true
+      results.push(result)
+    } catch (error: any) {
+      results.push({
+        enabled: true,
+        subscriptionId: playlist.key,
+        playlistFile: '',
+        displayName: playlist.displayName,
+        found: playlist.rows.length,
+        downloaded: 0,
+        missing: 0,
+        skipped: 0,
+        updated: false,
+        scan: { requested: false, ok: true, error: '' },
+        error: error.message || String(error),
+      })
+    }
+  }
+
+  writeManifest(manifest)
+  if (hasUpdatedPlaylist && scanAfterExport && shouldScanAfterPlaylistExport()) {
+    const scan = await requestNavidromeScan()
+    const lastUpdated = [...results].reverse().find(result => result.updated)
+    if (lastUpdated) lastUpdated.scan = scan
+  }
   return results
 }

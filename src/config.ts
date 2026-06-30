@@ -52,6 +52,15 @@ export interface AppConfig {
     clientName: string
     apiVersion: string
   }
+  localMatch: {
+    enabled: boolean
+    watchEnabled: boolean
+    watchDebounceMs: number
+    includeUnmatchedPlaylist: boolean
+    unmatchedPlaylistName: string
+    matchMode: 'strict' | 'metadata' | 'duration'
+    durationToleranceSeconds: number
+  }
 }
 
 const defaults: AppConfig = {
@@ -103,6 +112,15 @@ const defaults: AppConfig = {
     clientName: 'lxfetch',
     apiVersion: '1.16.1',
   },
+  localMatch: {
+    enabled: false,
+    watchEnabled: true,
+    watchDebounceMs: 30000,
+    includeUnmatchedPlaylist: true,
+    unmatchedPlaylistName: '未匹配',
+    matchMode: 'duration',
+    durationToleranceSeconds: 3,
+  },
 }
 
 const localRequire = createRequire(__filename)
@@ -115,6 +133,7 @@ const mergeConfig = (base: AppConfig, override: any): AppConfig => ({
   download: { ...base.download, ...(override.download || {}) },
   subscription: { ...base.subscription, ...(override.subscription || {}) },
   navidrome: { ...base.navidrome, ...(override.navidrome || {}) },
+  localMatch: { ...base.localMatch, ...(override.localMatch || {}) },
 })
 
 const getEnv = (...names: string[]) => {
@@ -194,6 +213,15 @@ const getEnvConfig = () => {
       clientName: getEnv('LXFETCH_NAVIDROME_CLIENT_NAME'),
       apiVersion: getEnv('LXFETCH_NAVIDROME_API_VERSION'),
     }),
+    localMatch: compactObject({
+      enabled: getEnvBoolean('LXFETCH_LOCAL_MATCH_ENABLED'),
+      watchEnabled: getEnvBoolean('LXFETCH_LOCAL_MATCH_WATCH_ENABLED'),
+      watchDebounceMs: getEnvNumber('LXFETCH_LOCAL_MATCH_WATCH_DEBOUNCE_MS'),
+      includeUnmatchedPlaylist: getEnvBoolean('LXFETCH_LOCAL_MATCH_INCLUDE_UNMATCHED_PLAYLIST'),
+      unmatchedPlaylistName: getEnv('LXFETCH_LOCAL_MATCH_UNMATCHED_PLAYLIST_NAME'),
+      matchMode: getEnv('LXFETCH_LOCAL_MATCH_MODE'),
+      durationToleranceSeconds: getEnvNumber('LXFETCH_LOCAL_MATCH_DURATION_TOLERANCE_SECONDS'),
+    }),
   }
 }
 
@@ -203,6 +231,14 @@ const normalizeConfig = (config: AppConfig): AppConfig => ({
     ...config.navidrome,
     playlistPathMode: config.navidrome.playlistPathMode === 'absolute' ? 'absolute' : 'relative',
     playlistExportIntervalMinutes: Math.max(1, Math.round(Number(config.navidrome.playlistExportIntervalMinutes || 5))),
+  },
+  localMatch: {
+    ...config.localMatch,
+    matchMode: ['strict', 'metadata', 'duration'].includes(config.localMatch.matchMode)
+      ? config.localMatch.matchMode
+      : 'duration',
+    watchDebounceMs: Math.max(1000, Math.round(Number(config.localMatch.watchDebounceMs || 30000))),
+    durationToleranceSeconds: Math.max(0, Math.round(Number(config.localMatch.durationToleranceSeconds || 3))),
   },
 })
 
