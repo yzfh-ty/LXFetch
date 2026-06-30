@@ -23,8 +23,14 @@ const state = {
   tasks: [],
   taskStats: null,
   taskStatusFilter: 'all',
+  tasksPage: 1,
+  tasksPageSize: 12,
   files: [],
+  filesPage: 1,
+  filesPageSize: 20,
   subscriptions: [],
+  subscriptionsPage: 1,
+  subscriptionsPageSize: 8,
   localMatchState: null,
   subscriptionIntervalMinutes: Number(localStorage.getItem(SUBSCRIPTION_INTERVAL_STORAGE_KEY) || 360),
   searchResults: [],
@@ -33,6 +39,8 @@ const state = {
   songListHotTags: [],
   songListSorts: [],
   songListPage: 1,
+  songListResultsPage: 1,
+  songListResultsPageSize: 8,
   songListMode: 'list',
   songListKeyword: '',
   songListUid: '',
@@ -40,10 +48,10 @@ const state = {
   songListSongs: [],
   songListDetailAllSongs: [],
   songListDetailPage: 1,
-  songListDetailPageSize: 30,
+  songListDetailPageSize: 24,
   leaderBoards: [],
   leaderBoardPage: 1,
-  leaderBoardPageSize: 12,
+  leaderBoardPageSize: 10,
   activeLeaderBoard: null,
   leaderSongs: [],
   leaderPage: 1,
@@ -109,6 +117,93 @@ const getOptions = () => ({
 });
 
 const qualityLabel = (quality) => QUALITY_LABELS[quality] || quality || '';
+
+const getPageCount = (total, pageSize) => Math.max(1, Math.ceil(Number(total || 0) / Math.max(1, Number(pageSize || 1))));
+
+const clampPage = (page, total, pageSize) => Math.max(1, Math.min(Number(page || 1), getPageCount(total, pageSize)));
+
+const getPagedItems = (items, pageKey, pageSizeKey) => {
+  const list = Array.isArray(items) ? items : [];
+  state[pageSizeKey] = Math.max(1, Number(state[pageSizeKey] || 1));
+  state[pageKey] = clampPage(state[pageKey], list.length, state[pageSizeKey]);
+  const start = (state[pageKey] - 1) * state[pageSizeKey];
+  const end = Math.min(start + state[pageSizeKey], list.length);
+  return {
+    items: list.slice(start, end),
+    page: state[pageKey],
+    pageCount: getPageCount(list.length, state[pageSizeKey]),
+    pageSize: state[pageSizeKey],
+    startIndex: list.length ? start + 1 : 0,
+    endIndex: end,
+    total: list.length,
+  };
+};
+
+const PAGE_SIZE_OPTIONS = {
+  tasks: [8, 12, 20, 50],
+  subscriptions: [5, 8, 12, 20],
+  files: [10, 20, 40, 80],
+};
+
+const PAGE_STATE = {
+  tasks: ['tasksPage', 'tasksPageSize'],
+  subscriptions: ['subscriptionsPage', 'subscriptionsPageSize'],
+  files: ['filesPage', 'filesPageSize'],
+};
+
+const renderPagedList = (kind) => {
+  if (kind === 'tasks') renderTasks();
+  if (kind === 'subscriptions') renderSubscriptions();
+  if (kind === 'files') renderFiles();
+};
+
+const clearPager = (targetId) => {
+  const el = $(targetId);
+  if (el) el.innerHTML = '';
+};
+
+const renderPager = (targetId, kind, pageData, unit = '条') => {
+  const el = $(targetId);
+  if (!el) return;
+  const options = PAGE_SIZE_OPTIONS[kind] || [];
+  const canPrev = pageData.page > 1;
+  const canNext = pageData.page < pageData.pageCount;
+  const rangeText = pageData.total
+    ? `${pageData.startIndex}-${pageData.endIndex} / ${pageData.total}`
+    : `0 / 0`;
+  el.innerHTML = `
+    <span class="page-info">显示 ${rangeText} ${unit} · 第 ${pageData.page} / ${pageData.pageCount} 页</span>
+    <span class="pager-controls">
+      ${options.length ? `
+        <label class="page-size-field">
+          <span>每页</span>
+          <select onchange="setListPageSize('${kind}', this.value)">
+            ${options.map(size => `<option value="${size}" ${Number(pageData.pageSize) === size ? 'selected' : ''}>${size}</option>`).join('')}
+          </select>
+        </label>
+      ` : ''}
+      <button type="button" onclick="changeListPage('${kind}', -1)" ${canPrev ? '' : 'disabled'}>上一页</button>
+      <button type="button" onclick="changeListPage('${kind}', 1)" ${canNext ? '' : 'disabled'}>下一页</button>
+    </span>
+  `;
+};
+
+window.changeListPage = (kind, delta) => {
+  const keys = PAGE_STATE[kind];
+  if (!keys) return;
+  const [pageKey] = keys;
+  state[pageKey] = Math.max(1, Number(state[pageKey] || 1) + Number(delta || 0));
+  renderPagedList(kind);
+};
+
+window.setListPageSize = (kind, value) => {
+  const keys = PAGE_STATE[kind];
+  if (!keys) return;
+  const [pageKey, pageSizeKey] = keys;
+  state[pageKey] = 1;
+  state[pageSizeKey] = Math.max(1, Number(value || state[pageSizeKey] || 1));
+  renderPagedList(kind);
+};
 
 const displayValue = (value) => {
   if (typeof value === 'boolean') return value ? '是' : '否';
@@ -412,13 +507,16 @@ const errorCategoryName = (category) => ({
 
 const renderTasks = () => {
   const filteredTasks = getFilteredTasks();
+  const pageData = getPagedItems(filteredTasks, 'tasksPage', 'tasksPageSize');
   const summary = $('tasks-summary');
   if (summary) {
     const stats = state.taskStats || {};
     const byStatus = stats.byStatus || {};
+    const pageRange = pageData.total ? `${pageData.startIndex}-${pageData.endIndex}` : '0';
     const parts = [
       `总数 ${Number(stats.total || 0)}`,
       `当前 ${filteredTasks.length}`,
+      `显示 ${pageRange}`,
       `活动 ${Number(stats.active || 0)}`,
       `速度 ${formatSize(stats.speed || 0)}/s`,
       `等待 ${Number(byStatus.waiting || 0)}`,
@@ -430,13 +528,16 @@ const renderTasks = () => {
   const el = $('tasks-list');
   if (!state.tasks.length) {
     el.innerHTML = '<div class="meta">暂无任务</div>';
+    clearPager('tasks-pager');
     return;
   }
   if (!filteredTasks.length) {
     el.innerHTML = '<div class="meta">当前筛选下暂无任务</div>';
+    clearPager('tasks-pager');
     return;
   }
-  el.innerHTML = filteredTasks.map(task => {
+  renderPager('tasks-pager', 'tasks', pageData, '个任务');
+  el.innerHTML = pageData.items.map(task => {
     const statusClass = task.status === 'finished' ? 'ok' : (task.status === 'failed' ? 'fail' : (task.status === 'stopped' ? 'warn' : ''));
     const qualityText = task.requestedQuality && task.requestedQuality !== task.quality
       ? `${qualityLabel(task.requestedQuality)} -> ${qualityLabel(task.quality)}`
@@ -624,8 +725,10 @@ const renderSubscriptions = () => {
   if (cancelAllButton) cancelAllButton.hidden = !hasRunningSubscription;
   if (!state.subscriptions.length) {
     el.innerHTML = '<div class="meta">暂无订阅</div>';
+    clearPager('subscriptions-pager');
     return;
   }
+  const pageData = getPagedItems(state.subscriptions, 'subscriptionsPage', 'subscriptionsPageSize');
   const priority = state.localMatchState?.priority || [];
   const priorityIndex = new Map(priority.map((id, index) => [id, index + 1]));
   const localSummary = localMatchEnabled ? `
@@ -644,7 +747,8 @@ const renderSubscriptions = () => {
       ${state.localMatchState?.lastError ? `<div class="meta">${escapeHtml(state.localMatchState.lastError)}</div>` : ''}
     </div>
   ` : '';
-  el.innerHTML = localSummary + state.subscriptions.map(sub => {
+  renderPager('subscriptions-pager', 'subscriptions', pageData, '个订阅');
+  el.innerHTML = localSummary + pageData.items.map(sub => {
     const statusClass = sub.lastRunStatus === 'success' ? 'ok' : (sub.lastRunStatus === 'failed' ? 'fail' : (sub.lastRunStatus === 'running' || sub.lastRunStatus === 'cancelled' ? 'warn' : ''));
     const order = priorityIndex.get(sub.id);
     const phaseText = sub.runPhase === 'creating' ? '创建任务中' : (sub.runPhase === 'scanning' ? '扫描中' : '');
@@ -972,15 +1076,57 @@ const loadSongListTags = async () => {
   renderSongListFilters();
 };
 
-const renderSongLists = () => {
-  renderCompactItems('songlist-results', state.songLists, 'openSongList', '暂无歌单');
-  $('songlist-prev').disabled = state.songListPage <= 1;
-  $('songlist-next').disabled = !state.songLists.length || (state.songListTotal > 0
-    ? state.songListPage * (state.songListLimit || state.songLists.length || 1) >= state.songListTotal
-    : false);
+const getSongListResultPageData = () => getPagedItems(state.songLists, 'songListResultsPage', 'songListResultsPageSize');
+
+const getSongListResultPageItems = () => getSongListResultPageData().items;
+
+const clearActiveSongListDetail = () => {
+  state.activeSongList = null;
+  state.songListSongs = [];
+  state.songListDetailAllSongs = [];
+  state.songListDetailPage = 1;
+  renderSongListDetail();
 };
 
-const loadSongLists = async (page = state.songListPage) => {
+const hasNextSongListRemotePage = () => {
+  if (!state.songLists.length) return false;
+  return state.songListTotal > 0
+    ? state.songListPage * (state.songListLimit || state.songLists.length || 1) < state.songListTotal
+    : true;
+};
+
+const renderSongLists = () => {
+  const pageData = getSongListResultPageData();
+  renderCompactItems('songlist-results', pageData.items, 'openSongList', '暂无歌单');
+  $('songlist-page').textContent = state.songLists.length
+    ? `接口页 ${state.songListPage} · ${pageData.page} / ${pageData.pageCount}`
+    : '1 / 1';
+  $('songlist-prev').disabled = state.songListPage <= 1 && pageData.page <= 1;
+  $('songlist-next').disabled = !state.songLists.length || (pageData.page >= pageData.pageCount && !hasNextSongListRemotePage());
+};
+
+const changeSongListResultsPage = (delta) => {
+  const pageData = getSongListResultPageData();
+  if (delta < 0) {
+    if (pageData.page > 1) {
+      state.songListResultsPage -= 1;
+      renderSongLists();
+      clearActiveSongListDetail();
+      return;
+    }
+    loadSongLists(Math.max(1, state.songListPage - 1), 'last').catch(error => toast(error.message));
+    return;
+  }
+  if (pageData.page < pageData.pageCount) {
+    state.songListResultsPage += 1;
+    renderSongLists();
+    clearActiveSongListDetail();
+    return;
+  }
+  loadSongLists(state.songListPage + 1).catch(error => toast(error.message));
+};
+
+const loadSongLists = async (page = state.songListPage, resultPage = 1) => {
   const source = $('songlist-source').value;
   if (!source) return toast('暂无支持歌单的平台');
   let data;
@@ -999,6 +1145,9 @@ const loadSongLists = async (page = state.songListPage) => {
   state.songListTotal = Number(data.total || 0);
   state.songListLimit = Number(data.limit || data.list?.length || 0);
   state.songLists = data.list || [];
+  state.songListResultsPage = resultPage === 'last'
+    ? getPageCount(state.songLists.length, state.songListResultsPageSize)
+    : 1;
   state.activeSongList = null;
   state.songListSongs = [];
   state.songListDetailAllSongs = [];
@@ -1049,7 +1198,7 @@ const changeSongListDetailPage = (delta) => {
 
 window.openSongList = async (index) => {
   try {
-    state.activeSongList = state.songLists[index];
+    state.activeSongList = getSongListResultPageItems()[index];
     state.songListDetailPage = 1;
     await loadSongListDetail();
   } catch (error) {
@@ -1179,13 +1328,16 @@ const renderFiles = () => {
   const el = $('files-list');
   if (!state.files.length) {
     el.innerHTML = '<div class="meta">暂无文件</div>';
+    clearPager('files-pager');
     return;
   }
+  const pageData = getPagedItems(state.files, 'filesPage', 'filesPageSize');
+  renderPager('files-pager', 'files', pageData, '个文件');
   el.innerHTML = `
     <table>
       <thead><tr><th>歌曲</th><th>文件</th><th>音质</th><th>大小</th><th>元数据</th><th></th></tr></thead>
       <tbody>
-        ${state.files.map(file => {
+        ${pageData.items.map(file => {
           const tagClass = file.tagStatus === 'ok' ? 'ok' : (file.tagStatus === 'error' ? 'fail' : 'warn');
           const actualQuality = file.actualQualityLabel || file.actualQuality || '';
           return `
@@ -1372,8 +1524,8 @@ const bindEvents = () => {
     }
   });
 
-  $('songlist-prev').addEventListener('click', () => loadSongLists(Math.max(1, state.songListPage - 1)).catch(error => toast(error.message)));
-  $('songlist-next').addEventListener('click', () => loadSongLists(state.songListPage + 1).catch(error => toast(error.message)));
+  $('songlist-prev').addEventListener('click', () => changeSongListResultsPage(-1));
+  $('songlist-next').addEventListener('click', () => changeSongListResultsPage(1));
   $('songlist-subscribe').addEventListener('click', () => subscribeActiveSongList());
   $('songlist-detail-prev').addEventListener('click', () => changeSongListDetailPage(-1));
   $('songlist-detail-next').addEventListener('click', () => changeSongListDetailPage(1));
@@ -1423,6 +1575,7 @@ const bindEvents = () => {
   $('refresh-tasks').addEventListener('click', () => loadTasks().catch(error => toast(error.message)));
   $('task-status-filter').addEventListener('change', event => {
     state.taskStatusFilter = event.target.value;
+    state.tasksPage = 1;
     renderTasks();
   });
   $('retry-failed-tasks').addEventListener('click', () => retryFailedTasks());

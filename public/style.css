@@ -299,6 +299,47 @@ textarea {
   white-space: nowrap;
 }
 
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.pager:empty {
+  display: none;
+}
+
+.page-info {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pager-controls,
+.page-size-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pager-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.page-size-field {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.page-size-field select {
+  width: 72px;
+  padding: 6px 8px;
+}
+
 .searchbar {
   display: grid;
   grid-template-columns: minmax(100px, 150px) 1fr auto;
@@ -499,5 +540,12 @@ th {
   }
   .task-toolbar select {
     width: 100%;
+  }
+  .pager {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .pager-controls {
+    justify-content: flex-start;
   }
 }
