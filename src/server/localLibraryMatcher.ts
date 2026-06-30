@@ -11,10 +11,12 @@ import type { Subscription } from './subscriptionManager'
 
 const LOCAL_MATCH_STATE_FILENAME = 'local_match_state.json'
 const LOCAL_LIBRARY_INDEX_FILENAME = 'local_library_index.json'
+const LOCAL_LIBRARY_INDEX_VERSION = 2
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.opus', '.ape'])
 const LXFETCH_UNMATCHED_KEY = '__lxfetch_local_unmatched__'
 
 export interface LocalLibraryTrack {
+  version?: number
   filename: string
   size: number
   mtimeMs: number
@@ -116,6 +118,38 @@ const normalizeText = (value: any) => String(value || '')
   .normalize('NFKC')
   .replace(/[^\p{L}\p{N}]+/gu, '')
 
+const normalizeArtistParts = (value: any) => {
+  const text = String(value || '')
+    .normalize('NFKC')
+    .replace(/\b(feat|featuring|ft)\.?\b/gi, '、')
+    .replace(/[,&/／+|｜;；，、]/g, '、')
+  const parts = text
+    .split('、')
+    .map(part => normalizeText(part))
+    .filter(Boolean)
+  const full = normalizeText(value)
+  if (full) parts.unshift(full)
+  return Array.from(new Set(parts))
+}
+
+const artistsMatch = (songArtist: string, track: LocalLibraryTrack) => {
+  const normalizedSongArtist = normalizeText(songArtist)
+  if (!normalizedSongArtist || !track.normalizedArtist) return false
+  if (track.normalizedArtist === normalizedSongArtist) return true
+
+  const songParts = normalizeArtistParts(songArtist)
+  const trackParts = normalizeArtistParts(track.artist)
+  for (const songPart of songParts) {
+    for (const trackPart of trackParts) {
+      if (songPart === trackPart) return true
+      if (songPart.length >= 2 && trackPart.length >= 2 && (songPart.includes(trackPart) || trackPart.includes(songPart))) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 const parseDurationSeconds = (value: any) => {
   const text = String(value || '').trim()
   if (!text) return 0
@@ -136,7 +170,7 @@ const getSongText = (song: any, keys: string[]) => {
 }
 
 const getSongTitle = (song: any) => getSongText(song, ['name', 'songName', 'title'])
-const getSongArtist = (song: any) => getSongText(song, ['singer', 'artist', 'author'])
+const getSongArtist = (song: any) => getSongText(song, ['singer', 'singerName', 'artist', 'artistName', 'author', 'authorName'])
 const getSongAlbum = (song: any) => getSongText(song, ['albumName', 'album'])
 const getSongDurationSeconds = (song: any) => {
   const interval = getSongText(song, ['interval', 'duration'])
@@ -200,7 +234,9 @@ const scanTrack = async (
 ) => {
   const filePath = path.join(downloadsDir, filename)
   const stat = fs.statSync(filePath)
-  if (existing && existing.size === stat.size && existing.mtimeMs === stat.mtimeMs) return existing
+  if (existing && existing.version === LOCAL_LIBRARY_INDEX_VERSION && existing.size === stat.size && existing.mtimeMs === stat.mtimeMs) {
+    return existing
+  }
 
   const filenameInfo = parseTitleArtistFromFilename(filename)
   const fallbackTitle = filenameInfo.title
@@ -240,6 +276,7 @@ const scanTrack = async (
   const normalizedArtist = normalizeText(artist)
   const normalizedAlbum = normalizeText(album)
   return {
+    version: LOCAL_LIBRARY_INDEX_VERSION,
     filename,
     size: stat.size,
     mtimeMs: stat.mtimeMs,
@@ -307,12 +344,13 @@ const matchSongToTrack = (
   }
 
   const title = normalizeText(getSongTitle(song))
-  const artist = normalizeText(getSongArtist(song))
+  const rawArtist = getSongArtist(song)
+  const artist = normalizeText(rawArtist)
   const album = normalizeText(getSongAlbum(song))
   if (!title || !artist) return undefined
 
   for (const track of availableTracks.values()) {
-    if (track.normalizedTitle === title && track.normalizedArtist === artist && (!album || !track.normalizedAlbum || track.normalizedAlbum === album)) {
+    if (track.normalizedTitle === title && artistsMatch(rawArtist, track) && (!album || !track.normalizedAlbum || track.normalizedAlbum === album)) {
       return track
     }
   }
@@ -321,7 +359,7 @@ const matchSongToTrack = (
   const duration = getSongDurationSeconds(song)
   const tolerance = appConfig.localMatch.durationToleranceSeconds
   for (const track of availableTracks.values()) {
-    if (track.normalizedTitle !== title || track.normalizedArtist !== artist) continue
+    if (track.normalizedTitle !== title || !artistsMatch(rawArtist, track)) continue
     if (!duration || !track.durationSeconds || Math.abs(track.durationSeconds - duration) <= tolerance) return track
   }
   return undefined
@@ -381,6 +419,7 @@ class LocalLibraryMatcher {
       }> = []
 
       let matched = 0
+      const assignedFilenames = new Set<string>()
       for (const subscription of orderedSubscriptions(subscriptions, state.priority)) {
         const songs = await getSongs(subscription)
         const rows: Array<{ filename: string }> = []
@@ -392,6 +431,7 @@ class LocalLibraryMatcher {
           const track = matchSongToTrack(song, availableTracks, appConfig.localMatch.matchMode)
           if (!track) continue
           rows.push({ filename: track.filename })
+          assignedFilenames.add(track.filename)
           availableTracks.delete(track.filename)
         }
         matched += rows.length
@@ -408,7 +448,9 @@ class LocalLibraryMatcher {
         playlists.push({
           key: LXFETCH_UNMATCHED_KEY,
           displayName: appConfig.localMatch.unmatchedPlaylistName || '未匹配',
-          rows: Array.from(availableTracks.values()).map(track => ({ filename: track.filename })),
+          rows: tracks
+            .filter(track => !assignedFilenames.has(track.filename))
+            .map(track => ({ filename: track.filename })),
           found: tracks.length,
           missing: 0,
         })
